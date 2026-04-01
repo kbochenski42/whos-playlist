@@ -264,6 +264,56 @@
       font-size: 0.8rem;
       line-height: 1.3;
     }
+
+    .round-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border-radius: 999px;
+      padding: 6px 12px;
+      background: linear-gradient(90deg, rgba(34, 197, 94, 0.22), rgba(14, 165, 233, 0.2));
+      border: 1px solid rgba(148, 163, 184, 0.35);
+      font-size: 0.85rem;
+      font-weight: 700;
+      width: fit-content;
+    }
+
+    .track-card {
+      display: grid;
+      grid-template-columns: 92px 1fr;
+      gap: 10px;
+      background: linear-gradient(180deg, rgba(31, 41, 55, 0.95), rgba(17, 24, 39, 0.95));
+      border: 1px solid rgba(148, 163, 184, 0.26);
+      border-radius: 14px;
+      padding: 10px;
+      align-items: center;
+    }
+
+    .track-cover {
+      width: 92px;
+      height: 92px;
+      border-radius: 10px;
+      object-fit: cover;
+      background: rgba(148, 163, 184, 0.2);
+      border: 1px solid rgba(148, 163, 184, 0.28);
+    }
+
+    .track-title {
+      font-size: 1rem;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+
+    .track-artist {
+      color: #93c5fd;
+      font-size: 0.88rem;
+      margin-top: 4px;
+    }
+
+    .highlight {
+      border-color: rgba(34, 197, 94, 0.7);
+      background: rgba(34, 197, 94, 0.16);
+    }
   </style>
 </head>
 <body>
@@ -362,7 +412,7 @@
             <input id="trackLink" value="Tryb manualny wyłączony. Gra bazuje wyłącznie na Spotify Stats." readonly />
           </div>
         </div>
-        <button id="startRoundBtn">Start rundy</button>
+        <button id="startRoundBtn">Start gry (10 rund)</button>
         <button id="forceResultBtn" class="ghost">Reveal (awaryjnie)</button>
       </div>
     </section>
@@ -370,8 +420,16 @@
     <section id="roundSection" class="panel hidden">
       <h2>Runda</h2>
       <p class="mini">Posłuchaj fragmentu i zagłosuj: czyja to piosenka?</p>
+      <div class="round-chip" id="roundCounter">Runda 1/10</div>
       <div class="stack" style="margin-top: 8px;">
-        <div class="pill" id="trackMeta">Brak danych utworu</div>
+        <div class="track-card">
+          <img id="trackImage" class="track-cover" alt="Okładka utworu" />
+          <div>
+            <div id="trackTitle" class="track-title">Brak danych utworu</div>
+            <div id="trackArtistLabel" class="track-artist">Po starcie rundy pojawi się tu utwór.</div>
+          </div>
+        </div>
+        <div class="pill" id="trackMeta">Spotify Stats Round</div>
         <audio id="audioPlayer" controls></audio>
       </div>
       <div class="vote-list" id="voteList"></div>
@@ -383,15 +441,21 @@
 
     <section id="resultSection" class="panel hidden">
       <h2>Wynik</h2>
+      <div class="round-chip" id="resultRoundCounter">Runda 1/10</div>
       <div class="status" id="resultHeadline"></div>
       <div class="stack" style="margin-top: 10px;">
         <div class="mini">Kto zgadł?</div>
         <div id="correctList" class="players"></div>
       </div>
       <div class="stack" style="margin-top: 10px;">
+        <div class="mini">Kto na kogo głosował?</div>
+        <div id="votesBreakdown" class="players"></div>
+      </div>
+      <div class="stack" style="margin-top: 10px;">
         <div class="mini">Punkty</div>
         <div class="scores" id="scoresBox"></div>
       </div>
+      <div id="winnerBanner" class="status hidden" style="margin-top: 10px;"></div>
       <div id="resultHostActions" class="hidden" style="margin-top: 10px;">
         <button id="nextRoundBtn">Następna runda</button>
       </div>
@@ -436,14 +500,21 @@
 
     const trackMeta = document.getElementById("trackMeta");
     const audioPlayer = document.getElementById("audioPlayer");
+    const trackImage = document.getElementById("trackImage");
+    const trackTitle = document.getElementById("trackTitle");
+    const trackArtistLabel = document.getElementById("trackArtistLabel");
+    const roundCounter = document.getElementById("roundCounter");
     const voteList = document.getElementById("voteList");
     const voteState = document.getElementById("voteState");
     const roundHostActions = document.getElementById("roundHostActions");
     const showResultBtn = document.getElementById("showResultBtn");
 
     const resultHeadline = document.getElementById("resultHeadline");
+    const resultRoundCounter = document.getElementById("resultRoundCounter");
     const correctList = document.getElementById("correctList");
+    const votesBreakdown = document.getElementById("votesBreakdown");
     const scoresBox = document.getElementById("scoresBox");
+    const winnerBanner = document.getElementById("winnerBanner");
     const resultHostActions = document.getElementById("resultHostActions");
     const nextRoundBtn = document.getElementById("nextRoundBtn");
 
@@ -454,6 +525,9 @@
     const SPOTIFY_CLIENT_ID = "4c377a1c26e74ca7bb20a77df95db1f8";
     const SPOTIFY_RANGE_KEY = "whos-playlist-spotify-range";
     const SPOTIFY_RANGES = ["short_term", "medium_term", "long_term"];
+    const TOTAL_ROUNDS = 10;
+    const AUTO_NEXT_DELAY_MS = 4200;
+    const DEFAULT_COVER = "https://i.scdn.co/image/ab67616d00001e0287f7f0b2c5f7a3d5b38f4f70";
     const FIREBASE_CONFIG = {
       apiKey: "AIzaSyAxFGvgudq8QQHyIvVzsEVj6K26CBNAgHg",
       authDomain: "whos-playlist.firebaseapp.com",
@@ -468,6 +542,9 @@
     let db = null;
     let isCloudMode = false;
     let roomUnsubscribe = null;
+    let hostRevealInFlight = false;
+    let hostAutoNextTimeout = null;
+    let hostAutoNextKey = "";
 
     spotifyRangeSelect.value = localStorage.getItem(SPOTIFY_RANGE_KEY) || "medium_term";
 
@@ -524,13 +601,23 @@
         phase: "lobby",
         hostId,
         players: [],
+        game: {
+          totalRounds: TOTAL_ROUNDS,
+          currentRound: 0,
+          isActive: false,
+          isFinished: false
+        },
         currentTrack: {
           name: "",
           artist: "",
-          previewUrl: ""
+          previewUrl: "",
+          imageUrl: "",
+          externalUrl: ""
         },
         currentOwner: "",
         votes: {},
+        roundResolved: false,
+        revealedAt: 0,
         scores: {},
         updatedAt: Date.now()
       };
@@ -541,13 +628,13 @@
         const raw = localStorage.getItem(roomKey(roomId));
         if (!raw) return null;
         try {
-          return JSON.parse(raw);
+          return normalizeRoomData(JSON.parse(raw));
         } catch {
           return null;
         }
       }
       const snap = await roomDoc(roomId).get();
-      return snap.exists ? snap.data() : null;
+      return snap.exists ? normalizeRoomData(snap.data()) : null;
     }
 
     async function setRoomData(roomId, data) {
@@ -589,9 +676,30 @@
           render();
           return;
         }
-        roomData = snap.data();
+        roomData = normalizeRoomData(snap.data());
         render();
       });
+    }
+
+    function normalizeRoomData(room) {
+      if (!room) return room;
+      room.game = room.game || {};
+      room.game.totalRounds = room.game.totalRounds || TOTAL_ROUNDS;
+      room.game.currentRound = room.game.currentRound || 0;
+      room.game.isActive = Boolean(room.game.isActive);
+      room.game.isFinished = Boolean(room.game.isFinished);
+      room.currentTrack = room.currentTrack || {};
+      room.currentTrack.name = room.currentTrack.name || "";
+      room.currentTrack.artist = room.currentTrack.artist || "";
+      room.currentTrack.previewUrl = room.currentTrack.previewUrl || "";
+      room.currentTrack.imageUrl = room.currentTrack.imageUrl || "";
+      room.currentTrack.externalUrl = room.currentTrack.externalUrl || "";
+      room.roundResolved = Boolean(room.roundResolved);
+      room.revealedAt = room.revealedAt || 0;
+      room.votes = room.votes || {};
+      room.scores = room.scores || {};
+      room.players = room.players || [];
+      return room;
     }
 
     function loadSession() {
@@ -680,16 +788,19 @@
 
     async function resolvePreviewFromITunes(track) {
       const term = `${track.name || ""} ${track.artist || ""}`.trim();
-      if (!term) return "";
+      if (!term) return { previewUrl: "", imageUrl: "" };
       try {
         const response = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(term)}&entity=song&limit=5`);
-        if (!response.ok) return "";
+        if (!response.ok) return { previewUrl: "", imageUrl: "" };
         const data = await response.json();
         const items = data.results || [];
         const found = items.find((item) => item.previewUrl);
-        return found?.previewUrl || "";
+        return {
+          previewUrl: found?.previewUrl || "",
+          imageUrl: found?.artworkUrl100 || found?.artworkUrl60 || ""
+        };
       } catch {
-        return "";
+        return { previewUrl: "", imageUrl: "" };
       }
     }
 
@@ -766,7 +877,8 @@
         name: item.name || "Unknown Song",
         artist: (item.artists || []).map((a) => a.name).join(", ") || "Unknown Artist",
         previewUrl: item.preview_url || "",
-        externalUrl: item.external_urls?.spotify || ""
+        externalUrl: item.external_urls?.spotify || "",
+        imageUrl: item.album?.images?.[0]?.url || item.album?.images?.[1]?.url || ""
       }));
     }
 
@@ -928,6 +1040,51 @@
       }
     }
 
+    function getSortedRanking(room = roomData) {
+      return [...(room?.players || [])]
+        .map((p) => ({ id: p.id, name: p.name, score: room?.scores?.[p.id] || 0 }))
+        .sort((a, b) => b.score - a.score);
+    }
+
+    async function buildRoundPayload(selectedRange) {
+      const candidates = roomData.players
+        .map((player) => {
+          const options = getPlayerSpotifyTracksByRange(player, selectedRange);
+          return { player, options };
+        })
+        .filter((row) => row.options.length);
+
+      if (!candidates.length) return null;
+
+      // Try up to 10 draws to find a playable preview.
+      for (let i = 0; i < 10; i += 1) {
+        const randomOwner = candidates[Math.floor(Math.random() * candidates.length)];
+        const picked = randomOwner.options[Math.floor(Math.random() * randomOwner.options.length)];
+        let previewUrl = picked.previewUrl || "";
+        let imageUrl = picked.imageUrl || "";
+        if (!previewUrl) {
+          const fallback = await resolvePreviewFromITunes(picked);
+          previewUrl = fallback.previewUrl || "";
+          if (!imageUrl) {
+            imageUrl = fallback.imageUrl || "";
+          }
+        }
+        if (!previewUrl) continue;
+        return {
+          ownerId: randomOwner.player.id,
+          track: {
+            name: picked.name || "Unknown Song",
+            artist: picked.artist || "Unknown Artist",
+            previewUrl,
+            imageUrl: imageUrl || DEFAULT_COVER,
+            externalUrl: picked.externalUrl || ""
+          }
+        };
+      }
+
+      return null;
+    }
+
     async function fetchTrackFromLink() {
       const raw = trackLink.value.trim();
       if (!raw) {
@@ -980,6 +1137,11 @@
     }
 
     async function leaveRoom() {
+      if (hostAutoNextTimeout) {
+        clearTimeout(hostAutoNextTimeout);
+        hostAutoNextTimeout = null;
+      }
+      hostAutoNextKey = "";
       if (session && session.roomId) {
         const room = await getRoomData(session.roomId);
         if (room) {
@@ -1054,39 +1216,24 @@
         showStatus(`Nie wszyscy mają Spotify stats. Brakuje: ${unready.map((p) => p.name).join(", ")}.`, true);
         return;
       }
-
-      const candidates = roomData.players
-        .map((player) => {
-          const options = getPlayerSpotifyTracksByRange(player, selectedRange);
-          return { player, options };
-        })
-        .filter((row) => row.options.length);
-      if (!candidates.length) {
-        showStatus("Brak utworów w Spotify stats graczy.", true);
-        return;
-      }
-      const randomOwner = candidates[Math.floor(Math.random() * candidates.length)];
-      const ownerId = randomOwner.player.id;
-      const picked = randomOwner.options[Math.floor(Math.random() * randomOwner.options.length)];
-      trackName.value = picked.name || "Unknown Song";
-      trackArtist.value = picked.artist || "Unknown Artist";
-      trackUrl.value = picked.previewUrl || "";
-      if (!trackUrl.value.trim()) {
-        trackUrl.value = await resolvePreviewFromITunes(picked);
-      }
-
-      if (!trackUrl.value.trim()) {
-        showStatus("Nie znaleziono preview dla wylosowanego utworu. Spróbuj Start rundy ponownie.", true);
+      const payload = await buildRoundPayload(selectedRange);
+      if (!payload) {
+        showStatus("Nie udało się wylosować utworu z działającym preview. Spróbuj ponownie.", true);
         return;
       }
 
-      roomData.currentTrack = {
-        name: trackName.value.trim() || "Unknown Song",
-        artist: trackArtist.value.trim() || "Unknown Artist",
-        previewUrl: trackUrl.value.trim()
+      roomData.scores = Object.fromEntries(roomData.players.map((p) => [p.id, 0]));
+      roomData.game = {
+        totalRounds: TOTAL_ROUNDS,
+        currentRound: 1,
+        isActive: true,
+        isFinished: false
       };
-      roomData.currentOwner = ownerId;
+      roomData.currentTrack = payload.track;
+      roomData.currentOwner = payload.ownerId;
       roomData.votes = {};
+      roomData.roundResolved = false;
+      roomData.revealedAt = 0;
       roomData.phase = "round";
       roomData.updatedAt = Date.now();
       await setRoomData(roomData.roomId, roomData);
@@ -1103,13 +1250,22 @@
 
     async function revealResult() {
       if (!session || !roomData || !isHost(session.playerId, roomData)) return;
+      if (roomData.roundResolved) return;
       const ownerId = roomData.currentOwner;
+      const correctVoters = [];
       Object.entries(roomData.votes).forEach(([voterId, votedFor]) => {
         if (votedFor === ownerId) {
           roomData.scores[voterId] = (roomData.scores[voterId] || 0) + 1;
+          correctVoters.push(voterId);
         }
       });
       roomData.phase = "result";
+      roomData.roundResolved = true;
+      roomData.revealedAt = Date.now();
+      roomData.resultSnapshot = {
+        ownerId,
+        correctVoters
+      };
       roomData.updatedAt = Date.now();
       await setRoomData(roomData.roomId, roomData);
       render();
@@ -1117,10 +1273,47 @@
 
     async function nextRound() {
       if (!session || !roomData || !isHost(session.playerId, roomData)) return;
-      roomData.phase = "lobby";
+      const selectedRange = spotifyRangeSelect.value || "medium_term";
+      const game = roomData.game || { totalRounds: TOTAL_ROUNDS, currentRound: 0, isActive: false, isFinished: false };
+
+      if (!game.isActive || game.isFinished) {
+        roomData.phase = "lobby";
+        roomData.votes = {};
+        roomData.currentOwner = "";
+        roomData.roundResolved = false;
+        roomData.revealedAt = 0;
+        roomData.currentTrack = { name: "", artist: "", previewUrl: "", imageUrl: "", externalUrl: "" };
+        roomData.updatedAt = Date.now();
+        await setRoomData(roomData.roomId, roomData);
+        render();
+        return;
+      }
+
+      const nextIndex = (game.currentRound || 0) + 1;
+      if (nextIndex > (game.totalRounds || TOTAL_ROUNDS)) {
+        roomData.game.isFinished = true;
+        roomData.game.isActive = false;
+        roomData.phase = "result";
+        roomData.roundResolved = true;
+        roomData.updatedAt = Date.now();
+        await setRoomData(roomData.roomId, roomData);
+        render();
+        return;
+      }
+
+      const payload = await buildRoundPayload(selectedRange);
+      if (!payload) {
+        showStatus("Nie udało się wylosować kolejnej nuty z preview. Spróbuj jeszcze raz.", true);
+        return;
+      }
+
+      roomData.game.currentRound = nextIndex;
+      roomData.currentTrack = payload.track;
+      roomData.currentOwner = payload.ownerId;
       roomData.votes = {};
-      roomData.currentOwner = "";
-      roomData.currentTrack = { name: "", artist: "", previewUrl: "" };
+      roomData.roundResolved = false;
+      roomData.revealedAt = 0;
+      roomData.phase = "round";
       roomData.updatedAt = Date.now();
       await setRoomData(roomData.roomId, roomData);
       render();
@@ -1177,8 +1370,18 @@
     }
 
     function renderRound() {
-      const track = roomData.currentTrack || { name: "", artist: "", previewUrl: "" };
-      trackMeta.textContent = `${track.name || "Unknown Song"} - ${track.artist || "Unknown Artist"}`;
+      const totalRounds = roomData.game?.totalRounds || TOTAL_ROUNDS;
+      const currentRound = roomData.game?.currentRound || 1;
+      roundCounter.textContent = `Runda ${currentRound}/${totalRounds}`;
+
+      const track = roomData.currentTrack || { name: "", artist: "", previewUrl: "", imageUrl: "" };
+      trackMeta.textContent = "Spotify Stats Round";
+      trackTitle.textContent = track.name || "Unknown Song";
+      trackArtistLabel.textContent = track.artist || "Unknown Artist";
+      trackImage.src = track.imageUrl || DEFAULT_COVER;
+      trackImage.onerror = () => {
+        trackImage.src = DEFAULT_COVER;
+      };
       audioPlayer.src = track.previewUrl || "";
 
       voteList.innerHTML = "";
@@ -1201,12 +1404,18 @@
     }
 
     function renderResult() {
+      const totalRounds = roomData.game?.totalRounds || TOTAL_ROUNDS;
+      const currentRound = roomData.game?.currentRound || 1;
+      resultRoundCounter.textContent = `Runda ${currentRound}/${totalRounds}`;
+
       const owner = roomData.players.find((p) => p.id === roomData.currentOwner);
       const ownerName = owner ? owner.name : "Nieznany";
-      resultHeadline.textContent = `To była piosenka gracza: ${ownerName}`;
+      resultHeadline.textContent = `To była piosenka gracza: ${ownerName}.`;
 
       const correct = roomData.players.filter((p) => roomData.votes[p.id] === roomData.currentOwner);
       correctList.innerHTML = "";
+      votesBreakdown.innerHTML = "";
+      winnerBanner.classList.add("hidden");
 
       if (!correct.length) {
         const row = document.createElement("div");
@@ -1222,6 +1431,15 @@
         });
       }
 
+      roomData.players.forEach((player) => {
+        const votedId = roomData.votes[player.id];
+        const votedName = roomData.players.find((p) => p.id === votedId)?.name || "brak głosu";
+        const row = document.createElement("div");
+        row.className = "player";
+        row.innerHTML = `<span>${player.name}</span><span class="mini">głos: ${votedName}</span>`;
+        votesBreakdown.appendChild(row);
+      });
+
       const ranking = [...roomData.players]
         .map((p) => ({ name: p.name, score: roomData.scores[p.id] || 0 }))
         .sort((a, b) => b.score - a.score);
@@ -1229,10 +1447,19 @@
       scoresBox.innerHTML = "";
       ranking.forEach((r) => {
         const row = document.createElement("div");
-        row.className = "score";
+        row.className = "score" + (ranking[0] && r.name === ranking[0].name ? " highlight" : "");
         row.innerHTML = `<span>${r.name}</span><strong>${r.score} pkt</strong>`;
         scoresBox.appendChild(row);
       });
+
+      if (roomData.game?.isFinished) {
+        const best = ranking[0];
+        const tied = ranking.filter((r) => r.score === best.score).map((r) => r.name);
+        winnerBanner.classList.remove("hidden");
+        winnerBanner.textContent = tied.length > 1
+          ? `Koniec gry: remis między ${tied.join(", ")} (${best.score} pkt).`
+          : `Koniec gry: zwycięzca to ${best.name} (${best.score} pkt).`;
+      }
     }
 
     function updateSpotifyStatsInfo() {
@@ -1246,6 +1473,45 @@
       const previews = getPlayerSpotifyTracksByRange(mine, selectedRange).filter((t) => t.previewUrl).length;
       const topArtist = mine?.spotify?.topArtistsByRange?.[selectedRange]?.[0]?.name || "brak";
       spotifyStatsInfo.value = `Range: ${rangeLabels[selectedRange]} • preview: ${previews} • top artist: ${topArtist}`;
+    }
+
+    function scheduleHostAutoNext() {
+      if (!session || !roomData || !isHost(session.playerId, roomData) || roomData.phase !== "result" || roomData.game?.isFinished) {
+        if (hostAutoNextTimeout) {
+          clearTimeout(hostAutoNextTimeout);
+          hostAutoNextTimeout = null;
+        }
+        hostAutoNextKey = "";
+        return;
+      }
+      const key = `${roomData.roomId}-${roomData.game?.currentRound}-${roomData.revealedAt || 0}`;
+      if (key === hostAutoNextKey) return;
+      if (hostAutoNextTimeout) {
+        clearTimeout(hostAutoNextTimeout);
+      }
+      hostAutoNextKey = key;
+      hostAutoNextTimeout = setTimeout(async () => {
+        hostAutoNextTimeout = null;
+        if (!session || !roomData || !isHost(session.playerId, roomData)) return;
+        if (roomData.phase !== "result" || roomData.game?.isFinished) return;
+        await nextRound();
+      }, AUTO_NEXT_DELAY_MS);
+    }
+
+    async function maybeAutoRevealForHost() {
+      if (!session || !roomData || !isHost(session.playerId, roomData)) return;
+      if (roomData.phase !== "round") return;
+      if (roomData.roundResolved) return;
+      const total = roomData.players.length;
+      const votesCount = Object.keys(roomData.votes || {}).length;
+      if (total > 0 && votesCount >= total && !hostRevealInFlight) {
+        hostRevealInFlight = true;
+        try {
+          await revealResult();
+        } finally {
+          hostRevealInFlight = false;
+        }
+      }
     }
 
     function render() {
@@ -1271,6 +1537,7 @@
       hostControls.classList.toggle("hidden", !host);
       roundHostActions.classList.toggle("hidden", !host);
       resultHostActions.classList.toggle("hidden", !host);
+      nextRoundBtn.textContent = roomData.game?.isFinished ? "Wróć do lobby" : "Następna runda teraz";
 
       updateSpotifyStatsInfo();
       renderPlayers();
@@ -1285,6 +1552,7 @@
         const selectedRange = spotifyRangeSelect.value || "medium_term";
         const unready = getUnreadyPlayers(selectedRange);
         startRoundBtn.disabled = unready.length > 0;
+        startRoundBtn.textContent = roomData.game?.isFinished ? "Zagraj ponownie (10 rund)" : "Start gry (10 rund)";
         if (unready.length) {
           showMusicStatus(`Aby zacząć rundę, Spotify muszą połączyć: ${unready.map((p) => p.name).join(", ")}.`, true);
         } else {
@@ -1294,6 +1562,7 @@
         startRoundBtn.disabled = false;
         trackSource.disabled = true;
         ownerSelect.disabled = true;
+        startRoundBtn.textContent = "Start gry (10 rund)";
       }
 
       lobbySection.classList.toggle("hidden", roomData.phase !== "lobby");
@@ -1302,6 +1571,11 @@
 
       if (roomData.phase === "round") renderRound();
       if (roomData.phase === "result") renderResult();
+
+      if (host) {
+        maybeAutoRevealForHost();
+        scheduleHostAutoNext();
+      }
     }
 
     async function syncAndRender() {
