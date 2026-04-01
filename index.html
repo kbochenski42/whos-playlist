@@ -669,13 +669,28 @@
     }
 
     function playerIsSpotifyReady(player, range) {
-      const tracks = getPlayerSpotifyTracksByRange(player, range).filter((t) => t.previewUrl);
+      const tracks = getPlayerSpotifyTracksByRange(player, range);
       return tracks.length > 0;
     }
 
     function getUnreadyPlayers(range) {
       if (!roomData?.players?.length) return [];
       return roomData.players.filter((p) => !playerIsSpotifyReady(p, range));
+    }
+
+    async function resolvePreviewFromITunes(track) {
+      const term = `${track.name || ""} ${track.artist || ""}`.trim();
+      if (!term) return "";
+      try {
+        const response = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(term)}&entity=song&limit=5`);
+        if (!response.ok) return "";
+        const data = await response.json();
+        const items = data.results || [];
+        const found = items.find((item) => item.previewUrl);
+        return found?.previewUrl || "";
+      } catch {
+        return "";
+      }
     }
 
     function toBase64Url(bytes) {
@@ -1042,12 +1057,12 @@
 
       const candidates = roomData.players
         .map((player) => {
-          const options = getPlayerSpotifyTracksByRange(player, selectedRange).filter((t) => t.previewUrl);
+          const options = getPlayerSpotifyTracksByRange(player, selectedRange);
           return { player, options };
         })
         .filter((row) => row.options.length);
       if (!candidates.length) {
-        showStatus("Brak graczy z preview trackami w Spotify stats.", true);
+        showStatus("Brak utworów w Spotify stats graczy.", true);
         return;
       }
       const randomOwner = candidates[Math.floor(Math.random() * candidates.length)];
@@ -1056,9 +1071,12 @@
       trackName.value = picked.name || "Unknown Song";
       trackArtist.value = picked.artist || "Unknown Artist";
       trackUrl.value = picked.previewUrl || "";
+      if (!trackUrl.value.trim()) {
+        trackUrl.value = await resolvePreviewFromITunes(picked);
+      }
 
       if (!trackUrl.value.trim()) {
-        showStatus("Brak preview URL (mp3). Ta runda potrzebuje odtwarzalnego fragmentu.", true);
+        showStatus("Nie znaleziono preview dla wylosowanego utworu. Spróbuj Start rundy ponownie.", true);
         return;
       }
 
@@ -1141,8 +1159,8 @@
         const rangeTracks = getPlayerSpotifyTracksByRange(p, selectedRange);
         const spotifyPreviews = rangeTracks.filter((t) => t.previewUrl).length;
         const favArtist = p.spotify?.topArtistsByRange?.[selectedRange]?.[0]?.name || p.spotify?.profile?.favoriteArtist || "";
-        const spotifyLabel = spotifyPreviews
-          ? `Spotify stats: ${spotifyPreviews} preview${favArtist ? ` • top: ${favArtist}` : ""}`
+        const spotifyLabel = rangeTracks.length
+          ? `Spotify stats: ${rangeTracks.length} tracks • preview: ${spotifyPreviews}${favArtist ? ` • top: ${favArtist}` : ""}`
           : "Spotify stats: brak";
         row.innerHTML = `<span>${p.name}${me} <span class="mini">• ${role} • ${spotifyLabel}</span></span><span>${score} pkt</span>`;
         playersList.appendChild(row);
@@ -1152,7 +1170,7 @@
       roomData.players.forEach((p) => {
         const opt = document.createElement("option");
         opt.value = p.id;
-        const spotifyReady = getPlayerSpotifyTracksByRange(p, selectedRange).some((t) => t.previewUrl);
+        const spotifyReady = getPlayerSpotifyTracksByRange(p, selectedRange).length > 0;
         opt.textContent = spotifyReady ? `${p.name} (Spotify ready)` : p.name;
         ownerSelect.appendChild(opt);
       });
