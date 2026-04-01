@@ -37,6 +37,19 @@
       margin: 0 auto;
       display: grid;
       gap: 12px;
+      min-height: calc(100vh - 24px);
+    }
+
+    .app.auth-mode {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0;
+    }
+
+    .app.auth-mode #authSection {
+      width: min(680px, 100%);
+      margin: 0 auto;
     }
 
     .panel {
@@ -520,12 +533,14 @@
       </div>
     </section>
 
-    <p class="footer-note">Prosty tryb imprezowy: Spotify + 10 szybkich rund.</p>
+    <p id="footerNote" class="footer-note">Prosty tryb imprezowy: Spotify + 10 szybkich rund.</p>
   </main>
 
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
   <script>
+    const appRoot = document.querySelector(".app");
+    const footerNote = document.getElementById("footerNote");
     const roomInput = document.getElementById("roomInput");
     const nameInput = document.getElementById("nameInput");
     const createBtn = document.getElementById("createBtn");
@@ -1674,8 +1689,11 @@
       }
 
       const spotifyReady = hasSpotifyAuth();
+      const authMode = !spotifyReady && !session;
+      appRoot.classList.toggle("auth-mode", authMode);
       authSection.classList.remove("hidden");
       entrySection.classList.toggle("hidden", !spotifyReady);
+      footerNote.classList.toggle("hidden", authMode);
       createBtn.disabled = !spotifyReady;
       joinBtn.disabled = !spotifyReady;
       roomInput.disabled = !spotifyReady;
