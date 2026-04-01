@@ -306,6 +306,7 @@
         <p class="mini">Spotify Stats: top tracks + top artists (4 tyg, 6 mies, all time). Apple Music: import po linku utworu.</p>
         <div class="hint">Kliknij `Połącz Spotify` i zaloguj się. Przekierowanie robi się automatycznie.</div>
         <div class="hint">Jednorazowo ustaw `SPOTIFY_CLIENT_ID` w kodzie i Redirect URI: `https://kbochenski42.github.io/whos-playlist/`.</div>
+        <div class="hint"><strong>Wymagane do startu rundy:</strong> każdy gracz w pokoju musi połączyć Spotify Stats.</div>
         <div class="grid two">
           <div>
             <label for="spotifyRangeSelect">Zakres Spotify stats</label>
@@ -345,7 +346,7 @@
             <input id="trackUrl" placeholder="https://..." />
           </div>
           <div>
-            <label for="ownerSelect">Właściciel piosenki</label>
+            <label for="ownerSelect">Gracze z Spotify (właściciel losowany automatycznie)</label>
             <select id="ownerSelect"></select>
           </div>
         </div>
@@ -353,18 +354,14 @@
           <div>
             <label for="trackSource">Źródło rundy</label>
             <select id="trackSource">
-              <option value="spotify_stats_auto">Spotify Stats Auto (losowy gracz + top track)</option>
-              <option value="manual">Manual (własne pola)</option>
-              <option value="owner_spotify">Losuj z top Spotify właściciela</option>
-              <option value="link">Import po linku Spotify/Apple</option>
+              <option value="spotify_stats_auto">Spotify Stats Auto (wymagane logowanie wszystkich)</option>
             </select>
           </div>
           <div>
-            <label for="trackLink">Link Spotify/Apple (dla opcji Import)</label>
-            <input id="trackLink" placeholder="https://open.spotify.com/track/... lub https://music.apple.com/..." />
+            <label for="trackLink">Status</label>
+            <input id="trackLink" value="Tryb manualny wyłączony. Gra bazuje wyłącznie na Spotify Stats." readonly />
           </div>
         </div>
-        <button id="fetchTrackBtn" class="ghost">Pobierz dane z linku</button>
         <button id="startRoundBtn">Start rundy</button>
         <button id="forceResultBtn" class="ghost">Reveal (awaryjnie)</button>
       </div>
@@ -429,7 +426,6 @@
     const trackUrl = document.getElementById("trackUrl");
     const trackSource = document.getElementById("trackSource");
     const trackLink = document.getElementById("trackLink");
-    const fetchTrackBtn = document.getElementById("fetchTrackBtn");
     const startRoundBtn = document.getElementById("startRoundBtn");
     const forceResultBtn = document.getElementById("forceResultBtn");
     const spotifyRangeSelect = document.getElementById("spotifyRangeSelect");
@@ -455,7 +451,7 @@
     const SESSION_KEY = "whos-playlist-session";
     const SPOTIFY_AUTH_KEY = "whos-playlist-spotify-auth";
     const SPOTIFY_CLIENT_KEY = "whos-playlist-spotify-client-id";
-    const SPOTIFY_CLIENT_ID = "WSTAW_SPOTIFY_CLIENT_ID";
+    const SPOTIFY_CLIENT_ID = "4c377a1c26e74ca7bb20a77df95db1f8";
     const SPOTIFY_RANGE_KEY = "whos-playlist-spotify-range";
     const SPOTIFY_RANGES = ["short_term", "medium_term", "long_term"];
     const FIREBASE_CONFIG = {
@@ -670,6 +666,16 @@
       if (Array.isArray(byRange) && byRange.length) return byRange;
       if (Array.isArray(player.spotify.topTracks)) return player.spotify.topTracks;
       return [];
+    }
+
+    function playerIsSpotifyReady(player, range) {
+      const tracks = getPlayerSpotifyTracksByRange(player, range).filter((t) => t.previewUrl);
+      return tracks.length > 0;
+    }
+
+    function getUnreadyPlayers(range) {
+      if (!roomData?.players?.length) return [];
+      return roomData.players.filter((p) => !playerIsSpotifyReady(p, range));
     }
 
     function toBase64Url(bytes) {
@@ -1027,55 +1033,29 @@
 
     async function startRound() {
       if (!session || !roomData || !isHost(session.playerId, roomData)) return;
-      let ownerId = ownerSelect.value;
       const selectedRange = spotifyRangeSelect.value || "medium_term";
-
-      const source = trackSource.value;
-      if (source === "spotify_stats_auto") {
-        const candidates = roomData.players
-          .map((player) => {
-            const options = getPlayerSpotifyTracksByRange(player, selectedRange).filter((t) => t.previewUrl);
-            return { player, options };
-          })
-          .filter((row) => row.options.length);
-        if (!candidates.length) {
-          showStatus("Brak graczy z preview trackami w Spotify stats. Niech gracze klikną Połącz Spotify.", true);
-          return;
-        }
-        const randomOwner = candidates[Math.floor(Math.random() * candidates.length)];
-        ownerId = randomOwner.player.id;
-        const picked = randomOwner.options[Math.floor(Math.random() * randomOwner.options.length)];
-        trackName.value = picked.name || "Unknown Song";
-        trackArtist.value = picked.artist || "Unknown Artist";
-        trackUrl.value = picked.previewUrl || "";
-      } else if (source === "owner_spotify") {
-        if (!ownerId) {
-          showStatus("Wybierz właściciela piosenki.", true);
-          return;
-        }
-        const owner = getPlayerById(ownerId);
-        const options = getPlayerSpotifyTracksByRange(owner, selectedRange).filter((t) => t.previewUrl);
-        if (!options.length) {
-          showStatus("Wybrany gracz nie ma Spotify stats z preview dla tego zakresu.", true);
-          return;
-        }
-        const picked = options[Math.floor(Math.random() * options.length)];
-        trackName.value = picked.name || "Unknown Song";
-        trackArtist.value = picked.artist || "Unknown Artist";
-        trackUrl.value = picked.previewUrl || "";
-      } else if (source === "link") {
-        if (!ownerId) {
-          showStatus("Wybierz właściciela piosenki.", true);
-          return;
-        }
-        const ok = await fetchTrackFromLink();
-        if (!ok) return;
-      } else if (source === "manual") {
-        if (!ownerId) {
-          showStatus("Wybierz właściciela piosenki.", true);
-          return;
-        }
+      const unready = getUnreadyPlayers(selectedRange);
+      if (unready.length) {
+        showStatus(`Nie wszyscy mają Spotify stats. Brakuje: ${unready.map((p) => p.name).join(", ")}.`, true);
+        return;
       }
+
+      const candidates = roomData.players
+        .map((player) => {
+          const options = getPlayerSpotifyTracksByRange(player, selectedRange).filter((t) => t.previewUrl);
+          return { player, options };
+        })
+        .filter((row) => row.options.length);
+      if (!candidates.length) {
+        showStatus("Brak graczy z preview trackami w Spotify stats.", true);
+        return;
+      }
+      const randomOwner = candidates[Math.floor(Math.random() * candidates.length)];
+      const ownerId = randomOwner.player.id;
+      const picked = randomOwner.options[Math.floor(Math.random() * randomOwner.options.length)];
+      trackName.value = picked.name || "Unknown Song";
+      trackArtist.value = picked.artist || "Unknown Artist";
+      trackUrl.value = picked.previewUrl || "";
 
       if (!trackUrl.value.trim()) {
         showStatus("Brak preview URL (mp3). Ta runda potrzebuje odtwarzalnego fragmentu.", true);
@@ -1277,6 +1257,27 @@
       updateSpotifyStatsInfo();
       renderPlayers();
 
+      if (host && roomData.phase === "lobby") {
+        trackSource.value = "spotify_stats_auto";
+        trackSource.disabled = true;
+        ownerSelect.disabled = true;
+        trackName.readOnly = true;
+        trackArtist.readOnly = true;
+        trackUrl.readOnly = true;
+        const selectedRange = spotifyRangeSelect.value || "medium_term";
+        const unready = getUnreadyPlayers(selectedRange);
+        startRoundBtn.disabled = unready.length > 0;
+        if (unready.length) {
+          showMusicStatus(`Aby zacząć rundę, Spotify muszą połączyć: ${unready.map((p) => p.name).join(", ")}.`, true);
+        } else {
+          showMusicStatus("Wszyscy gracze mają Spotify stats. Możesz startować rundę.");
+        }
+      } else {
+        startRoundBtn.disabled = false;
+        trackSource.disabled = true;
+        ownerSelect.disabled = true;
+      }
+
       lobbySection.classList.toggle("hidden", roomData.phase !== "lobby");
       roundSection.classList.toggle("hidden", roomData.phase !== "round");
       resultSection.classList.toggle("hidden", roomData.phase !== "result");
@@ -1294,7 +1295,6 @@
     joinBtn.addEventListener("click", () => createOrJoinRoom(false));
     leaveBtn.addEventListener("click", () => leaveRoom());
     startRoundBtn.addEventListener("click", () => startRound());
-    fetchTrackBtn.addEventListener("click", () => fetchTrackFromLink());
     connectSpotifyBtn.addEventListener("click", () => connectSpotify());
     refreshSpotifyBtn.addEventListener("click", () => refreshSpotifyTracks());
     spotifyRangeSelect.addEventListener("change", () => {
