@@ -258,6 +258,12 @@
       text-align: center;
       margin-top: 4px;
     }
+
+    .hint {
+      color: #bfdbfe;
+      font-size: 0.8rem;
+      line-height: 1.3;
+    }
   </style>
 </head>
 <body>
@@ -294,6 +300,29 @@
       <h2>Lobby</h2>
       <p>Gracze dołączają na żywo. Host ustawia piosenkę i właściciela rundy.</p>
       <div class="players" id="playersList"></div>
+
+      <div class="stack" style="margin-top: 10px;">
+        <h2>Integracje muzyczne</h2>
+        <p class="mini">Spotify: OAuth i top tracks gracza. Apple Music: import po linku utworu.</p>
+        <div class="grid two">
+          <div>
+            <label for="spotifyClientId">Spotify Client ID (opcjonalnie)</label>
+            <input id="spotifyClientId" placeholder="Wklej Client ID z Spotify Dashboard" />
+            <div class="hint">Utwórz app w Spotify Developer i dodaj redirect URI tej strony.</div>
+          </div>
+          <div>
+            <label for="spotifyScopeInfo">Status</label>
+            <input id="spotifyScopeInfo" value="Scope: user-top-read" readonly />
+            <div class="hint">Po połączeniu zapisujemy skróconą listę top tracków w pokoju.</div>
+          </div>
+        </div>
+        <div class="grid two">
+          <button id="connectSpotifyBtn" class="secondary">Połącz Spotify</button>
+          <button id="refreshSpotifyBtn" class="ghost">Odśwież moje top tracks</button>
+        </div>
+        <div id="musicStatus" class="hidden status"></div>
+      </div>
+
       <div id="hostControls" class="hidden stack" style="margin-top: 10px;">
         <h2>Panel hosta</h2>
         <div class="grid two">
@@ -316,6 +345,21 @@
             <select id="ownerSelect"></select>
           </div>
         </div>
+        <div class="grid two">
+          <div>
+            <label for="trackSource">Źródło rundy</label>
+            <select id="trackSource">
+              <option value="manual">Manual (własne pola)</option>
+              <option value="owner_spotify">Losuj z top Spotify właściciela</option>
+              <option value="link">Import po linku Spotify/Apple</option>
+            </select>
+          </div>
+          <div>
+            <label for="trackLink">Link Spotify/Apple (dla opcji Import)</label>
+            <input id="trackLink" placeholder="https://open.spotify.com/track/... lub https://music.apple.com/..." />
+          </div>
+        </div>
+        <button id="fetchTrackBtn" class="ghost">Pobierz dane z linku</button>
         <button id="startRoundBtn">Start rundy</button>
         <button id="forceResultBtn" class="ghost">Reveal (awaryjnie)</button>
       </div>
@@ -351,9 +395,11 @@
       </div>
     </section>
 
-    <p class="footer-note">MVP działa bez backendu, z synchronizacją między kartami przez LocalStorage.</p>
+    <p class="footer-note">Tryb realtime: Firebase (jeśli skonfigurowany). Fallback: LocalStorage tylko na jednym urządzeniu.</p>
   </main>
 
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
   <script>
     const roomInput = document.getElementById("roomInput");
     const nameInput = document.getElementById("nameInput");
@@ -376,8 +422,15 @@
     const trackName = document.getElementById("trackName");
     const trackArtist = document.getElementById("trackArtist");
     const trackUrl = document.getElementById("trackUrl");
+    const trackSource = document.getElementById("trackSource");
+    const trackLink = document.getElementById("trackLink");
+    const fetchTrackBtn = document.getElementById("fetchTrackBtn");
     const startRoundBtn = document.getElementById("startRoundBtn");
     const forceResultBtn = document.getElementById("forceResultBtn");
+    const spotifyClientId = document.getElementById("spotifyClientId");
+    const connectSpotifyBtn = document.getElementById("connectSpotifyBtn");
+    const refreshSpotifyBtn = document.getElementById("refreshSpotifyBtn");
+    const musicStatus = document.getElementById("musicStatus");
 
     const trackMeta = document.getElementById("trackMeta");
     const audioPlayer = document.getElementById("audioPlayer");
@@ -394,9 +447,24 @@
 
     const ROOM_PREFIX = "whos-playlist-room-";
     const SESSION_KEY = "whos-playlist-session";
+    const SPOTIFY_AUTH_KEY = "whos-playlist-spotify-auth";
+    const SPOTIFY_CLIENT_KEY = "whos-playlist-spotify-client-id";
+    const FIREBASE_CONFIG = {
+      apiKey: "AIzaSyAxFGvgudq8QQHyIvVzsEVj6K26CBNAgHg",
+      authDomain: "whos-playlist.firebaseapp.com",
+      projectId: "whos-playlist",
+      storageBucket: "whos-playlist.firebasestorage.app",
+      messagingSenderId: "316708643796",
+      appId: "1:316708643796:web:185f4042d9ad5ae0372c41"
+    };
 
     let session = loadSession();
     let roomData = null;
+    let db = null;
+    let isCloudMode = false;
+    let roomUnsubscribe = null;
+
+    spotifyClientId.value = localStorage.getItem(SPOTIFY_CLIENT_KEY) || "";
 
     function safeId() {
       return Math.random().toString(36).slice(2, 10);
@@ -412,6 +480,113 @@
 
     function roomKey(roomId) {
       return ROOM_PREFIX + roomId;
+    }
+
+    function hasFirebaseConfig() {
+      return Boolean(
+        FIREBASE_CONFIG.apiKey &&
+        FIREBASE_CONFIG.authDomain &&
+        FIREBASE_CONFIG.projectId &&
+        FIREBASE_CONFIG.appId
+      );
+    }
+
+    function initDatabaseMode() {
+      if (!hasFirebaseConfig()) {
+        showStatus("Tryb lokalny: ustaw FIREBASE_CONFIG w kodzie, aby gracze mogli dołączać z różnych urządzeń.", true);
+        return;
+      }
+      try {
+        if (!firebase.apps.length) {
+          firebase.initializeApp(FIREBASE_CONFIG);
+        }
+        db = firebase.firestore();
+        isCloudMode = true;
+        showStatus("Tryb realtime aktywny: Firebase Firestore.");
+      } catch {
+        isCloudMode = false;
+        showStatus("Nie udało się uruchomić Firebase. Działa tryb lokalny.", true);
+      }
+    }
+
+    function roomDoc(roomId) {
+      return db.collection("rooms").doc(roomId);
+    }
+
+    function defaultRoomState(roomId, hostId) {
+      return {
+        roomId,
+        phase: "lobby",
+        hostId,
+        players: [],
+        currentTrack: {
+          name: "",
+          artist: "",
+          previewUrl: ""
+        },
+        currentOwner: "",
+        votes: {},
+        scores: {},
+        updatedAt: Date.now()
+      };
+    }
+
+    async function getRoomData(roomId) {
+      if (!isCloudMode) {
+        const raw = localStorage.getItem(roomKey(roomId));
+        if (!raw) return null;
+        try {
+          return JSON.parse(raw);
+        } catch {
+          return null;
+        }
+      }
+      const snap = await roomDoc(roomId).get();
+      return snap.exists ? snap.data() : null;
+    }
+
+    async function setRoomData(roomId, data) {
+      if (!isCloudMode) {
+        localStorage.setItem(roomKey(roomId), JSON.stringify(data));
+        return;
+      }
+      await roomDoc(roomId).set(data);
+    }
+
+    async function updateRoomData(roomId, updater) {
+      if (!isCloudMode) {
+        const current = await getRoomData(roomId);
+        if (!current) return null;
+        const next = updater(current);
+        await setRoomData(roomId, next);
+        return next;
+      }
+      const ref = roomDoc(roomId);
+      let nextRoom = null;
+      await db.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        if (!snap.exists) return;
+        const current = snap.data();
+        nextRoom = updater(current);
+        tx.set(ref, nextRoom);
+      });
+      return nextRoom;
+    }
+
+    function ensureRoomSubscription(roomId) {
+      if (!isCloudMode) return;
+      if (roomUnsubscribe) roomUnsubscribe();
+      roomUnsubscribe = roomDoc(roomId).onSnapshot((snap) => {
+        if (!snap.exists) {
+          roomData = null;
+          clearSession();
+          showStatus("Pokój został usunięty.", true);
+          render();
+          return;
+        }
+        roomData = snap.data();
+        render();
+      });
     }
 
     function loadSession() {
@@ -430,20 +605,6 @@
     function clearSession() {
       session = null;
       localStorage.removeItem(SESSION_KEY);
-    }
-
-    function getRoom(roomId) {
-      const raw = localStorage.getItem(roomKey(roomId));
-      if (!raw) return null;
-      try {
-        return JSON.parse(raw);
-      } catch {
-        return null;
-      }
-    }
-
-    function setRoom(roomId, data) {
-      localStorage.setItem(roomKey(roomId), JSON.stringify(data));
     }
 
     function isHost(playerId, room) {
@@ -471,9 +632,275 @@
       joinStatus.textContent = "";
     }
 
-    function leaveRoom() {
+    function showMusicStatus(text, isWarning = false) {
+      musicStatus.textContent = text;
+      musicStatus.classList.remove("hidden");
+      musicStatus.classList.toggle("warn", isWarning);
+    }
+
+    function clearMusicStatus() {
+      musicStatus.classList.add("hidden");
+      musicStatus.classList.remove("warn");
+      musicStatus.textContent = "";
+    }
+
+    function getPlayerById(playerId) {
+      return roomData?.players?.find((p) => p.id === playerId);
+    }
+
+    function toBase64Url(bytes) {
+      let binary = "";
+      bytes.forEach((b) => (binary += String.fromCharCode(b)));
+      return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+    }
+
+    function randomString(length = 64) {
+      const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+      let out = "";
+      const values = crypto.getRandomValues(new Uint8Array(length));
+      values.forEach((v) => (out += chars[v % chars.length]));
+      return out;
+    }
+
+    async function sha256Base64Url(text) {
+      const encoded = new TextEncoder().encode(text);
+      const digest = await crypto.subtle.digest("SHA-256", encoded);
+      return toBase64Url(new Uint8Array(digest));
+    }
+
+    function parseSpotifyTrackId(url) {
+      const direct = url.match(/track\/([A-Za-z0-9]{10,})/);
+      if (direct) return direct[1];
+      const uri = url.match(/spotify:track:([A-Za-z0-9]{10,})/);
+      return uri ? uri[1] : "";
+    }
+
+    function parseAppleTrackId(url) {
+      try {
+        const parsed = new URL(url);
+        const fromQuery = parsed.searchParams.get("i");
+        if (fromQuery) return fromQuery;
+        const idInPath = parsed.pathname.match(/id(\d+)/);
+        return idInPath ? idInPath[1] : "";
+      } catch {
+        return "";
+      }
+    }
+
+    function upsertPlayerSpotifyData(playerId, topTracks) {
+      const target = roomData.players.find((p) => p.id === playerId);
+      if (!target) return;
+      target.spotify = {
+        connectedAt: Date.now(),
+        topTracks: topTracks.slice(0, 20)
+      };
+      roomData.updatedAt = Date.now();
+      setRoomData(roomData.roomId, roomData);
+    }
+
+    async function fetchSpotifyTopTracks(accessToken) {
+      const response = await fetch("https://api.spotify.com/v1/me/top/tracks?limit=20&time_range=medium_term", {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      if (!response.ok) {
+        throw new Error("Spotify API error");
+      }
+      const payload = await response.json();
+      return (payload.items || []).map((item) => ({
+        name: item.name || "Unknown Song",
+        artist: (item.artists || []).map((a) => a.name).join(", ") || "Unknown Artist",
+        previewUrl: item.preview_url || "",
+        externalUrl: item.external_urls?.spotify || ""
+      }));
+    }
+
+    function getSpotifyTokenFromSession() {
+      if (!session) return "";
+      const key = `${SPOTIFY_AUTH_KEY}-token-${session.playerId}`;
+      try {
+        const raw = JSON.parse(localStorage.getItem(key) || "null");
+        if (!raw || !raw.accessToken || !raw.expiresAt) return "";
+        if (Date.now() > raw.expiresAt) return "";
+        return raw.accessToken;
+      } catch {
+        return "";
+      }
+    }
+
+    function saveSpotifyTokenForSession(accessToken, expiresInSeconds) {
+      if (!session) return;
+      const key = `${SPOTIFY_AUTH_KEY}-token-${session.playerId}`;
+      localStorage.setItem(
+        key,
+        JSON.stringify({
+          accessToken,
+          expiresAt: Date.now() + Math.max(60, expiresInSeconds - 30) * 1000
+        })
+      );
+    }
+
+    async function connectSpotify() {
+      clearMusicStatus();
+      if (!session || !roomData) {
+        showMusicStatus("Najpierw dołącz do pokoju.", true);
+        return;
+      }
+      const clientId = spotifyClientId.value.trim();
+      if (!clientId) {
+        showMusicStatus("Podaj Spotify Client ID.", true);
+        return;
+      }
+      localStorage.setItem(SPOTIFY_CLIENT_KEY, clientId);
+      const state = randomString(20);
+      const codeVerifier = randomString(64);
+      const codeChallenge = await sha256Base64Url(codeVerifier);
+      const redirectUri = window.location.origin + window.location.pathname;
+      localStorage.setItem(
+        SPOTIFY_AUTH_KEY,
+        JSON.stringify({
+          state,
+          codeVerifier,
+          redirectUri,
+          playerId: session.playerId,
+          roomId: session.roomId
+        })
+      );
+      const params = new URLSearchParams({
+        response_type: "code",
+        client_id: clientId,
+        scope: "user-top-read",
+        redirect_uri: redirectUri,
+        state,
+        code_challenge_method: "S256",
+        code_challenge: codeChallenge
+      });
+      window.location.href = `https://accounts.spotify.com/authorize?${params.toString()}`;
+    }
+
+    async function completeSpotifyAuthIfNeeded() {
+      const url = new URL(window.location.href);
+      const code = url.searchParams.get("code");
+      const state = url.searchParams.get("state");
+      if (!code || !state) return;
+
+      const raw = localStorage.getItem(SPOTIFY_AUTH_KEY);
+      if (!raw) {
+        showMusicStatus("Brak danych sesji Spotify. Spróbuj połączyć ponownie.", true);
+        return;
+      }
+      const auth = JSON.parse(raw);
+      if (auth.state !== state) {
+        showMusicStatus("Błędny state z autoryzacji Spotify.", true);
+        return;
+      }
+      if (!session || auth.playerId !== session.playerId || auth.roomId !== session.roomId) {
+        showMusicStatus("Sesja gracza nie pasuje do autoryzacji Spotify.", true);
+        return;
+      }
+      const clientId = localStorage.getItem(SPOTIFY_CLIENT_KEY) || "";
+      if (!clientId) {
+        showMusicStatus("Brak Spotify Client ID.", true);
+        return;
+      }
+
+      const tokenResponse = await fetch("https://accounts.spotify.com/api/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          code,
+          redirect_uri: auth.redirectUri,
+          client_id: clientId,
+          code_verifier: auth.codeVerifier
+        }).toString()
+      });
+
+      if (!tokenResponse.ok) {
+        showMusicStatus("Nie udało się wymienić kodu Spotify na token.", true);
+        return;
+      }
+
+      const tokenPayload = await tokenResponse.json();
+      saveSpotifyTokenForSession(tokenPayload.access_token, tokenPayload.expires_in || 3600);
+      await refreshSpotifyTracks();
+      localStorage.removeItem(SPOTIFY_AUTH_KEY);
+      url.searchParams.delete("code");
+      url.searchParams.delete("state");
+      window.history.replaceState({}, "", url.toString());
+    }
+
+    async function refreshSpotifyTracks() {
+      if (!session || !roomData) return;
+      const token = getSpotifyTokenFromSession();
+      if (!token) {
+        showMusicStatus("Brak aktywnego tokenu Spotify. Kliknij Połącz Spotify.", true);
+        return;
+      }
+      try {
+        const tracks = await fetchSpotifyTopTracks(token);
+        const previewTracks = tracks.filter((t) => t.previewUrl);
+        upsertPlayerSpotifyData(session.playerId, tracks);
+        showMusicStatus(`Spotify połączone. Zapisano ${tracks.length} top tracks (${previewTracks.length} z preview).`);
+        render();
+      } catch {
+        showMusicStatus("Nie udało się pobrać top tracks. Sprawdź połączenie Spotify.", true);
+      }
+    }
+
+    async function fetchTrackFromLink() {
+      const raw = trackLink.value.trim();
+      if (!raw) {
+        showStatus("Podaj link Spotify lub Apple Music.", true);
+        return false;
+      }
+
+      const spotifyId = parseSpotifyTrackId(raw);
+      if (spotifyId) {
+        try {
+          const oembedUrl = `https://open.spotify.com/oembed?url=${encodeURIComponent(`https://open.spotify.com/track/${spotifyId}`)}`;
+          const response = await fetch(oembedUrl);
+          if (!response.ok) throw new Error("Spotify oEmbed");
+          const data = await response.json();
+          trackName.value = data.title || trackName.value || "Spotify Track";
+          trackArtist.value = data.author_name || trackArtist.value || "Spotify Artist";
+          if (!trackUrl.value.trim()) {
+            showStatus("Spotify nie zawsze udostępnia preview mp3. Wklej Preview URL ręcznie.", true);
+          } else {
+            showStatus("Uzupełniono dane utworu z linku Spotify.");
+          }
+          return true;
+        } catch {
+          showStatus("Nie udało się pobrać danych z linku Spotify.", true);
+          return false;
+        }
+      }
+
+      const appleId = parseAppleTrackId(raw);
+      if (appleId) {
+        try {
+          const response = await fetch(`https://itunes.apple.com/lookup?id=${encodeURIComponent(appleId)}`);
+          if (!response.ok) throw new Error("Apple lookup");
+          const data = await response.json();
+          const track = (data.results || [])[0];
+          if (!track) throw new Error("No track");
+          trackName.value = track.trackName || trackName.value || "Apple Music Track";
+          trackArtist.value = track.artistName || trackArtist.value || "Apple Artist";
+          trackUrl.value = track.previewUrl || trackUrl.value || "";
+          showStatus("Uzupełniono dane utworu z Apple Music.");
+          return true;
+        } catch {
+          showStatus("Nie udało się pobrać danych z Apple Music linku.", true);
+          return false;
+        }
+      }
+
+      showStatus("Nierozpoznany link. Użyj linku utworu Spotify lub Apple Music.", true);
+      return false;
+    }
+
+    async function leaveRoom() {
       if (session && session.roomId) {
-        const room = getRoom(session.roomId);
+        const room = await getRoomData(session.roomId);
         if (room) {
           room.players = room.players.filter((p) => p.id !== session.playerId);
           delete room.scores[session.playerId];
@@ -481,8 +908,13 @@
           if (room.hostId === session.playerId && room.players[0]) {
             room.hostId = room.players[0].id;
           }
-          setRoom(session.roomId, room);
+          room.updatedAt = Date.now();
+          await setRoomData(session.roomId, room);
         }
+      }
+      if (roomUnsubscribe) {
+        roomUnsubscribe();
+        roomUnsubscribe = null;
       }
       clearSession();
       roomData = null;
@@ -490,7 +922,7 @@
       showStatus("Opuściłeś pokój.");
     }
 
-    function createOrJoinRoom(makeNew) {
+    async function createOrJoinRoom(makeNew) {
       clearStatus();
 
       const playerName = nameInput.value.trim();
@@ -510,51 +942,56 @@
       const playerId = session?.playerId || safeId();
       const player = { id: playerId, name: playerName };
 
-      let room = getRoom(roomId);
+      let room = await getRoomData(roomId);
 
       if (!room) {
         if (!makeNew) {
           showStatus("Ten pokój nie istnieje. Utwórz nowy.", true);
           return;
         }
-        room = {
-          roomId,
-          phase: "lobby",
-          hostId: playerId,
-          players: [],
-          currentTrack: {
-            name: "",
-            artist: "",
-            previewUrl: ""
-          },
-          currentOwner: "",
-          votes: {},
-          scores: {},
-          updatedAt: Date.now()
-        };
+        room = defaultRoomState(roomId, playerId);
       }
 
       upsertPlayer(room, player);
       room.scores[playerId] = room.scores[playerId] || 0;
       room.updatedAt = Date.now();
-      setRoom(roomId, room);
+      await setRoomData(roomId, room);
 
       saveSession({ roomId, playerId, name: playerName });
       roomInput.value = roomId;
       roomData = room;
+      ensureRoomSubscription(roomId);
       render();
       showStatus(makeNew ? "Pokój utworzony. Udostępnij Room ID znajomym." : "Dołączono do pokoju.");
     }
 
-    function startRound() {
+    async function startRound() {
       if (!session || !roomData || !isHost(session.playerId, roomData)) return;
       const ownerId = ownerSelect.value;
       if (!ownerId) {
         showStatus("Wybierz właściciela piosenki.", true);
         return;
       }
+
+      const source = trackSource.value;
+      if (source === "owner_spotify") {
+        const owner = getPlayerById(ownerId);
+        const options = (owner?.spotify?.topTracks || []).filter((t) => t.previewUrl);
+        if (!options.length) {
+          showStatus("Wybrany gracz nie ma Spotify top tracks z preview. Niech kliknie Połącz Spotify.", true);
+          return;
+        }
+        const picked = options[Math.floor(Math.random() * options.length)];
+        trackName.value = picked.name || "Unknown Song";
+        trackArtist.value = picked.artist || "Unknown Artist";
+        trackUrl.value = picked.previewUrl || "";
+      } else if (source === "link") {
+        const ok = await fetchTrackFromLink();
+        if (!ok) return;
+      }
+
       if (!trackUrl.value.trim()) {
-        showStatus("Podaj preview URL do utworu.", true);
+        showStatus("Brak preview URL (mp3). Ta runda potrzebuje odtwarzalnego fragmentu.", true);
         return;
       }
 
@@ -567,19 +1004,19 @@
       roomData.votes = {};
       roomData.phase = "round";
       roomData.updatedAt = Date.now();
-      setRoom(roomData.roomId, roomData);
+      await setRoomData(roomData.roomId, roomData);
       render();
     }
 
-    function submitVote(targetId) {
+    async function submitVote(targetId) {
       if (!session || !roomData || roomData.phase !== "round") return;
       roomData.votes[session.playerId] = targetId;
       roomData.updatedAt = Date.now();
-      setRoom(roomData.roomId, roomData);
+      await setRoomData(roomData.roomId, roomData);
       render();
     }
 
-    function revealResult() {
+    async function revealResult() {
       if (!session || !roomData || !isHost(session.playerId, roomData)) return;
       const ownerId = roomData.currentOwner;
       Object.entries(roomData.votes).forEach(([voterId, votedFor]) => {
@@ -589,27 +1026,27 @@
       });
       roomData.phase = "result";
       roomData.updatedAt = Date.now();
-      setRoom(roomData.roomId, roomData);
+      await setRoomData(roomData.roomId, roomData);
       render();
     }
 
-    function nextRound() {
+    async function nextRound() {
       if (!session || !roomData || !isHost(session.playerId, roomData)) return;
       roomData.phase = "lobby";
       roomData.votes = {};
       roomData.currentOwner = "";
       roomData.currentTrack = { name: "", artist: "", previewUrl: "" };
       roomData.updatedAt = Date.now();
-      setRoom(roomData.roomId, roomData);
+      await setRoomData(roomData.roomId, roomData);
       render();
     }
 
-    function loadRoomFromSession() {
+    async function loadRoomFromSession() {
       if (!session || !session.roomId) {
         roomData = null;
         return;
       }
-      const room = getRoom(session.roomId);
+      const room = await getRoomData(session.roomId);
       if (!room) {
         roomData = null;
         clearSession();
@@ -619,8 +1056,10 @@
 
       upsertPlayer(room, { id: session.playerId, name: session.name });
       room.scores[session.playerId] = room.scores[session.playerId] || 0;
-      setRoom(room.roomId, room);
+      room.updatedAt = Date.now();
+      await setRoomData(room.roomId, room);
       roomData = room;
+      ensureRoomSubscription(session.roomId);
     }
 
     function renderPlayers() {
@@ -631,7 +1070,9 @@
         const role = p.id === roomData.hostId ? "Host" : "Gracz";
         const me = session && p.id === session.playerId ? " (Ty)" : "";
         const score = roomData.scores[p.id] || 0;
-        row.innerHTML = `<span>${p.name}${me} <span class="mini">• ${role}</span></span><span>${score} pkt</span>`;
+        const spotifyPreviews = (p.spotify?.topTracks || []).filter((t) => t.previewUrl).length;
+        const spotifyLabel = spotifyPreviews ? `Spotify: ${spotifyPreviews} preview` : "Spotify: brak";
+        row.innerHTML = `<span>${p.name}${me} <span class="mini">• ${role} • ${spotifyLabel}</span></span><span>${score} pkt</span>`;
         playersList.appendChild(row);
       });
 
@@ -639,7 +1080,8 @@
       roomData.players.forEach((p) => {
         const opt = document.createElement("option");
         opt.value = p.id;
-        opt.textContent = p.name;
+        const spotifyReady = (p.spotify?.topTracks || []).some((t) => t.previewUrl);
+        opt.textContent = spotifyReady ? `${p.name} (Spotify ready)` : p.name;
         ownerSelect.appendChild(opt);
       });
     }
@@ -709,8 +1151,6 @@
         roomInput.value = session.roomId || "";
       }
 
-      loadRoomFromSession();
-
       if (!session || !roomData) {
         sessionBox.classList.add("hidden");
         lobbySection.classList.add("hidden");
@@ -739,25 +1179,41 @@
       if (roomData.phase === "result") renderResult();
     }
 
+    async function syncAndRender() {
+      await loadRoomFromSession();
+      render();
+    }
+
     createBtn.addEventListener("click", () => createOrJoinRoom(true));
     joinBtn.addEventListener("click", () => createOrJoinRoom(false));
-    leaveBtn.addEventListener("click", leaveRoom);
-    startRoundBtn.addEventListener("click", startRound);
-    showResultBtn.addEventListener("click", revealResult);
-    forceResultBtn.addEventListener("click", revealResult);
-    nextRoundBtn.addEventListener("click", nextRound);
+    leaveBtn.addEventListener("click", () => leaveRoom());
+    startRoundBtn.addEventListener("click", () => startRound());
+    fetchTrackBtn.addEventListener("click", () => fetchTrackFromLink());
+    connectSpotifyBtn.addEventListener("click", () => connectSpotify());
+    refreshSpotifyBtn.addEventListener("click", () => refreshSpotifyTracks());
+    spotifyClientId.addEventListener("input", () => {
+      localStorage.setItem(SPOTIFY_CLIENT_KEY, spotifyClientId.value.trim());
+    });
+    showResultBtn.addEventListener("click", () => revealResult());
+    forceResultBtn.addEventListener("click", () => revealResult());
+    nextRoundBtn.addEventListener("click", () => nextRound());
 
     window.addEventListener("storage", (event) => {
+      if (isCloudMode) return;
       if (!session || !session.roomId) return;
       if (event.key === roomKey(session.roomId)) {
-        render();
+        syncAndRender();
       }
     });
 
     if (session) {
       showStatus("Przywrócono poprzednią sesję.");
     }
-    render();
+    initDatabaseMode();
+    syncAndRender();
+    completeSpotifyAuthIfNeeded().catch(() => {
+      showMusicStatus("Nie udało się dokończyć logowania Spotify.", true);
+    });
   </script>
 </body>
 </html>
