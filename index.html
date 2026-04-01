@@ -303,7 +303,7 @@
 
       <div class="stack" style="margin-top: 10px;">
         <h2>Integracje muzyczne</h2>
-        <p class="mini">Spotify: OAuth i top tracks gracza. Apple Music: import po linku utworu.</p>
+        <p class="mini">Spotify Stats: top tracks + top artists (4 tyg, 6 mies, all time). Apple Music: import po linku utworu.</p>
         <div class="grid two">
           <div>
             <label for="spotifyClientId">Spotify Client ID (opcjonalnie)</label>
@@ -317,8 +317,22 @@
           </div>
         </div>
         <div class="grid two">
+          <div>
+            <label for="spotifyRangeSelect">Zakres Spotify stats</label>
+            <select id="spotifyRangeSelect">
+              <option value="short_term">Ostatnie 4 tygodnie</option>
+              <option value="medium_term" selected>Ostatnie 6 miesięcy</option>
+              <option value="long_term">All time</option>
+            </select>
+          </div>
+          <div>
+            <label for="spotifyStatsInfo">Tryb gry</label>
+            <input id="spotifyStatsInfo" value="Połącz Spotify, żeby grać na realnych statystykach." readonly />
+          </div>
+        </div>
+        <div class="grid two">
           <button id="connectSpotifyBtn" class="secondary">Połącz Spotify</button>
-          <button id="refreshSpotifyBtn" class="ghost">Odśwież moje top tracks</button>
+          <button id="refreshSpotifyBtn" class="ghost">Odśwież moje Spotify stats</button>
         </div>
         <div id="musicStatus" class="hidden status"></div>
       </div>
@@ -349,6 +363,7 @@
           <div>
             <label for="trackSource">Źródło rundy</label>
             <select id="trackSource">
+              <option value="spotify_stats_auto">Spotify Stats Auto (losowy gracz + top track)</option>
               <option value="manual">Manual (własne pola)</option>
               <option value="owner_spotify">Losuj z top Spotify właściciela</option>
               <option value="link">Import po linku Spotify/Apple</option>
@@ -428,6 +443,8 @@
     const startRoundBtn = document.getElementById("startRoundBtn");
     const forceResultBtn = document.getElementById("forceResultBtn");
     const spotifyClientId = document.getElementById("spotifyClientId");
+    const spotifyRangeSelect = document.getElementById("spotifyRangeSelect");
+    const spotifyStatsInfo = document.getElementById("spotifyStatsInfo");
     const connectSpotifyBtn = document.getElementById("connectSpotifyBtn");
     const refreshSpotifyBtn = document.getElementById("refreshSpotifyBtn");
     const musicStatus = document.getElementById("musicStatus");
@@ -449,6 +466,8 @@
     const SESSION_KEY = "whos-playlist-session";
     const SPOTIFY_AUTH_KEY = "whos-playlist-spotify-auth";
     const SPOTIFY_CLIENT_KEY = "whos-playlist-spotify-client-id";
+    const SPOTIFY_RANGE_KEY = "whos-playlist-spotify-range";
+    const SPOTIFY_RANGES = ["short_term", "medium_term", "long_term"];
     const FIREBASE_CONFIG = {
       apiKey: "AIzaSyAxFGvgudq8QQHyIvVzsEVj6K26CBNAgHg",
       authDomain: "whos-playlist.firebaseapp.com",
@@ -465,6 +484,7 @@
     let roomUnsubscribe = null;
 
     spotifyClientId.value = localStorage.getItem(SPOTIFY_CLIENT_KEY) || "";
+    spotifyRangeSelect.value = localStorage.getItem(SPOTIFY_RANGE_KEY) || "medium_term";
 
     function safeId() {
       return Math.random().toString(36).slice(2, 10);
@@ -648,6 +668,14 @@
       return roomData?.players?.find((p) => p.id === playerId);
     }
 
+    function getPlayerSpotifyTracksByRange(player, range) {
+      if (!player?.spotify) return [];
+      const byRange = player.spotify.statsByRange?.[range];
+      if (Array.isArray(byRange) && byRange.length) return byRange;
+      if (Array.isArray(player.spotify.topTracks)) return player.spotify.topTracks;
+      return [];
+    }
+
     function toBase64Url(bytes) {
       let binary = "";
       bytes.forEach((b) => (binary += String.fromCharCode(b)));
@@ -687,19 +715,30 @@
       }
     }
 
-    function upsertPlayerSpotifyData(playerId, topTracks) {
+    function upsertPlayerSpotifyData(playerId, statsByRange, topArtistsByRange) {
       const target = roomData.players.find((p) => p.id === playerId);
       if (!target) return;
+      const defaultRange = spotifyRangeSelect.value || "medium_term";
+      const currentTracks = statsByRange[defaultRange] || [];
+      const currentArtists = topArtistsByRange[defaultRange] || [];
       target.spotify = {
         connectedAt: Date.now(),
-        topTracks: topTracks.slice(0, 20)
+        selectedRange: defaultRange,
+        statsByRange,
+        topArtistsByRange,
+        topTracks: currentTracks.slice(0, 20),
+        topArtists: currentArtists.slice(0, 10),
+        profile: {
+          favoriteArtist: currentArtists[0]?.name || "",
+          totalPreviewTracks: Object.values(statsByRange).flat().filter((t) => t.previewUrl).length
+        }
       };
       roomData.updatedAt = Date.now();
       setRoomData(roomData.roomId, roomData);
     }
 
-    async function fetchSpotifyTopTracks(accessToken) {
-      const response = await fetch("https://api.spotify.com/v1/me/top/tracks?limit=20&time_range=medium_term", {
+    async function fetchSpotifyTopTracks(accessToken, range) {
+      const response = await fetch(`https://api.spotify.com/v1/me/top/tracks?limit=20&time_range=${range}`, {
         headers: { Authorization: `Bearer ${accessToken}` }
       });
       if (!response.ok) {
@@ -711,6 +750,21 @@
         artist: (item.artists || []).map((a) => a.name).join(", ") || "Unknown Artist",
         previewUrl: item.preview_url || "",
         externalUrl: item.external_urls?.spotify || ""
+      }));
+    }
+
+    async function fetchSpotifyTopArtists(accessToken, range) {
+      const response = await fetch(`https://api.spotify.com/v1/me/top/artists?limit=10&time_range=${range}`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      if (!response.ok) {
+        throw new Error("Spotify API error");
+      }
+      const payload = await response.json();
+      return (payload.items || []).map((item) => ({
+        name: item.name || "Unknown Artist",
+        genres: item.genres || [],
+        popularity: item.popularity || 0
       }));
     }
 
@@ -837,13 +891,24 @@
         return;
       }
       try {
-        const tracks = await fetchSpotifyTopTracks(token);
-        const previewTracks = tracks.filter((t) => t.previewUrl);
-        upsertPlayerSpotifyData(session.playerId, tracks);
-        showMusicStatus(`Spotify połączone. Zapisano ${tracks.length} top tracks (${previewTracks.length} z preview).`);
+        const statsByRange = {};
+        const topArtistsByRange = {};
+        for (const range of SPOTIFY_RANGES) {
+          const [tracks, artists] = await Promise.all([
+            fetchSpotifyTopTracks(token, range),
+            fetchSpotifyTopArtists(token, range)
+          ]);
+          statsByRange[range] = tracks;
+          topArtistsByRange[range] = artists;
+        }
+        upsertPlayerSpotifyData(session.playerId, statsByRange, topArtistsByRange);
+        const selected = spotifyRangeSelect.value || "medium_term";
+        const previews = (statsByRange[selected] || []).filter((t) => t.previewUrl).length;
+        const favArtist = (topArtistsByRange[selected] || [])[0]?.name || "brak";
+        showMusicStatus(`Spotify stats gotowe. Range: ${selected}, preview tracks: ${previews}, top artist: ${favArtist}.`);
         render();
       } catch {
-        showMusicStatus("Nie udało się pobrać top tracks. Sprawdź połączenie Spotify.", true);
+        showMusicStatus("Nie udało się pobrać Spotify stats. Sprawdź połączenie Spotify.", true);
       }
     }
 
@@ -967,18 +1032,36 @@
 
     async function startRound() {
       if (!session || !roomData || !isHost(session.playerId, roomData)) return;
-      const ownerId = ownerSelect.value;
-      if (!ownerId) {
-        showStatus("Wybierz właściciela piosenki.", true);
-        return;
-      }
+      let ownerId = ownerSelect.value;
+      const selectedRange = spotifyRangeSelect.value || "medium_term";
 
       const source = trackSource.value;
-      if (source === "owner_spotify") {
+      if (source === "spotify_stats_auto") {
+        const candidates = roomData.players
+          .map((player) => {
+            const options = getPlayerSpotifyTracksByRange(player, selectedRange).filter((t) => t.previewUrl);
+            return { player, options };
+          })
+          .filter((row) => row.options.length);
+        if (!candidates.length) {
+          showStatus("Brak graczy z preview trackami w Spotify stats. Niech gracze klikną Połącz Spotify.", true);
+          return;
+        }
+        const randomOwner = candidates[Math.floor(Math.random() * candidates.length)];
+        ownerId = randomOwner.player.id;
+        const picked = randomOwner.options[Math.floor(Math.random() * randomOwner.options.length)];
+        trackName.value = picked.name || "Unknown Song";
+        trackArtist.value = picked.artist || "Unknown Artist";
+        trackUrl.value = picked.previewUrl || "";
+      } else if (source === "owner_spotify") {
+        if (!ownerId) {
+          showStatus("Wybierz właściciela piosenki.", true);
+          return;
+        }
         const owner = getPlayerById(ownerId);
-        const options = (owner?.spotify?.topTracks || []).filter((t) => t.previewUrl);
+        const options = getPlayerSpotifyTracksByRange(owner, selectedRange).filter((t) => t.previewUrl);
         if (!options.length) {
-          showStatus("Wybrany gracz nie ma Spotify top tracks z preview. Niech kliknie Połącz Spotify.", true);
+          showStatus("Wybrany gracz nie ma Spotify stats z preview dla tego zakresu.", true);
           return;
         }
         const picked = options[Math.floor(Math.random() * options.length)];
@@ -986,8 +1069,17 @@
         trackArtist.value = picked.artist || "Unknown Artist";
         trackUrl.value = picked.previewUrl || "";
       } else if (source === "link") {
+        if (!ownerId) {
+          showStatus("Wybierz właściciela piosenki.", true);
+          return;
+        }
         const ok = await fetchTrackFromLink();
         if (!ok) return;
+      } else if (source === "manual") {
+        if (!ownerId) {
+          showStatus("Wybierz właściciela piosenki.", true);
+          return;
+        }
       }
 
       if (!trackUrl.value.trim()) {
@@ -1064,14 +1156,19 @@
 
     function renderPlayers() {
       playersList.innerHTML = "";
+      const selectedRange = spotifyRangeSelect.value || "medium_term";
       roomData.players.forEach((p) => {
         const row = document.createElement("div");
         row.className = "player";
         const role = p.id === roomData.hostId ? "Host" : "Gracz";
         const me = session && p.id === session.playerId ? " (Ty)" : "";
         const score = roomData.scores[p.id] || 0;
-        const spotifyPreviews = (p.spotify?.topTracks || []).filter((t) => t.previewUrl).length;
-        const spotifyLabel = spotifyPreviews ? `Spotify: ${spotifyPreviews} preview` : "Spotify: brak";
+        const rangeTracks = getPlayerSpotifyTracksByRange(p, selectedRange);
+        const spotifyPreviews = rangeTracks.filter((t) => t.previewUrl).length;
+        const favArtist = p.spotify?.topArtistsByRange?.[selectedRange]?.[0]?.name || p.spotify?.profile?.favoriteArtist || "";
+        const spotifyLabel = spotifyPreviews
+          ? `Spotify stats: ${spotifyPreviews} preview${favArtist ? ` • top: ${favArtist}` : ""}`
+          : "Spotify stats: brak";
         row.innerHTML = `<span>${p.name}${me} <span class="mini">• ${role} • ${spotifyLabel}</span></span><span>${score} pkt</span>`;
         playersList.appendChild(row);
       });
@@ -1080,7 +1177,7 @@
       roomData.players.forEach((p) => {
         const opt = document.createElement("option");
         opt.value = p.id;
-        const spotifyReady = (p.spotify?.topTracks || []).some((t) => t.previewUrl);
+        const spotifyReady = getPlayerSpotifyTracksByRange(p, selectedRange).some((t) => t.previewUrl);
         opt.textContent = spotifyReady ? `${p.name} (Spotify ready)` : p.name;
         ownerSelect.appendChild(opt);
       });
@@ -1145,6 +1242,19 @@
       });
     }
 
+    function updateSpotifyStatsInfo() {
+      const rangeLabels = {
+        short_term: "4 tygodnie",
+        medium_term: "6 miesięcy",
+        long_term: "all time"
+      };
+      const selectedRange = spotifyRangeSelect.value || "medium_term";
+      const mine = roomData?.players?.find((p) => p.id === session?.playerId);
+      const previews = getPlayerSpotifyTracksByRange(mine, selectedRange).filter((t) => t.previewUrl).length;
+      const topArtist = mine?.spotify?.topArtistsByRange?.[selectedRange]?.[0]?.name || "brak";
+      spotifyStatsInfo.value = `Range: ${rangeLabels[selectedRange]} • preview: ${previews} • top artist: ${topArtist}`;
+    }
+
     function render() {
       if (session) {
         nameInput.value = session.name || "";
@@ -1169,6 +1279,7 @@
       roundHostActions.classList.toggle("hidden", !host);
       resultHostActions.classList.toggle("hidden", !host);
 
+      updateSpotifyStatsInfo();
       renderPlayers();
 
       lobbySection.classList.toggle("hidden", roomData.phase !== "lobby");
@@ -1193,6 +1304,10 @@
     refreshSpotifyBtn.addEventListener("click", () => refreshSpotifyTracks());
     spotifyClientId.addEventListener("input", () => {
       localStorage.setItem(SPOTIFY_CLIENT_KEY, spotifyClientId.value.trim());
+    });
+    spotifyRangeSelect.addEventListener("change", () => {
+      localStorage.setItem(SPOTIFY_RANGE_KEY, spotifyRangeSelect.value);
+      render();
     });
     showResultBtn.addEventListener("click", () => revealResult());
     forceResultBtn.addEventListener("click", () => revealResult());
