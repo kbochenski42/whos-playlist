@@ -457,6 +457,7 @@
       <div class="auth-sub">Dołącz do gry ze znajomymi, podając kod pokoju lub rozpocznij własną rozgrywkę.</div>
       <div class="cta-stack">
         <button id="gateConnectBtn" class="btn-app-grad">Połącz Spotify</button>
+        <button id="gateLogoutBtn" class="btn-app-light">Wyloguj z konta Spotify</button>
         <button id="gateJoinBtn" class="btn-app-light" disabled>Dołącz do gry</button>
         <button id="gateHostBtn" class="btn-app-light" disabled>Rozpocznij rozgrywkę</button>
       </div>
@@ -606,6 +607,7 @@
     const authSection = document.getElementById("authSection");
     const entrySection = document.getElementById("entrySection");
     const gateConnectBtn = document.getElementById("gateConnectBtn");
+    const gateLogoutBtn = document.getElementById("gateLogoutBtn");
     const gateJoinBtn = document.getElementById("gateJoinBtn");
     const gateHostBtn = document.getElementById("gateHostBtn");
     const gateAvatar = document.getElementById("gateAvatar");
@@ -665,6 +667,7 @@
     const SPOTIFY_CLIENT_KEY = "whos-playlist-spotify-client-id";
     const SPOTIFY_CLIENT_ID = "4c377a1c26e74ca7bb20a77df95db1f8";
     const SPOTIFY_GLOBAL_TOKEN_KEY = "whos-playlist-spotify-global-token";
+    const SPOTIFY_AUTH_ACTIVE_KEY = "whos-playlist-spotify-auth-active";
     const SPOTIFY_RANGE_KEY = "whos-playlist-spotify-range";
     const SPOTIFY_RANGES = ["short_term", "medium_term", "long_term"];
     const TOTAL_ROUNDS = 10;
@@ -1104,6 +1107,35 @@
       );
     }
 
+    function setSpotifyAuthActive(active) {
+      try {
+        if (active) {
+          sessionStorage.setItem(SPOTIFY_AUTH_ACTIVE_KEY, "1");
+        } else {
+          sessionStorage.removeItem(SPOTIFY_AUTH_ACTIVE_KEY);
+        }
+      } catch {
+        // ignore storage issues
+      }
+    }
+
+    function isSpotifyAuthActive() {
+      try {
+        return sessionStorage.getItem(SPOTIFY_AUTH_ACTIVE_KEY) === "1";
+      } catch {
+        return false;
+      }
+    }
+
+    function clearSpotifyAuthData() {
+      setSpotifyAuthActive(false);
+      localStorage.removeItem(SPOTIFY_GLOBAL_TOKEN_KEY);
+      localStorage.removeItem(SPOTIFY_AUTH_KEY);
+      if (session?.playerId) {
+        localStorage.removeItem(`${SPOTIFY_AUTH_KEY}-token-${session.playerId}`);
+      }
+    }
+
     function syncGlobalTokenToSession() {
       if (!session?.playerId) return;
       try {
@@ -1119,12 +1151,14 @@
     }
 
     function hasSpotifyAuth() {
+      if (!isSpotifyAuthActive()) return false;
       return Boolean(getSpotifyTokenFromSession());
     }
 
     async function connectSpotify() {
       clearMusicStatus();
       clearAuthStatus();
+      setSpotifyAuthActive(true);
       const clientId = getConfiguredSpotifyClientId();
       if (!clientId) {
         showMusicStatus("Brak Spotify Client ID w kodzie. Ustaw SPOTIFY_CLIENT_ID w index.html.", true);
@@ -1200,6 +1234,7 @@
       }
 
       const tokenPayload = await tokenResponse.json();
+      setSpotifyAuthActive(true);
       saveSpotifyGlobalToken(tokenPayload.access_token, tokenPayload.expires_in || 3600);
       if (session) {
         saveSpotifyTokenForSession(tokenPayload.access_token, tokenPayload.expires_in || 3600);
@@ -1216,6 +1251,13 @@
       url.searchParams.delete("code");
       url.searchParams.delete("state");
       window.history.replaceState({}, "", url.toString());
+    }
+
+    async function logoutSpotify() {
+      clearSpotifyAuthData();
+      showMusicStatus("Wylogowano z konta Spotify.");
+      showAuthStatus("Wylogowano. Aby grać, połącz Spotify ponownie.", true);
+      render();
     }
 
     async function refreshSpotifyTracks() {
@@ -1730,6 +1772,7 @@
     async function bootstrapSpotifyDataIfNeeded() {
       if (spotifyBootstrapTried) return;
       if (!session || !roomData) return;
+      if (!hasSpotifyAuth()) return;
       const token = getSpotifyTokenFromSession();
       if (!token) return;
       spotifyBootstrapTried = true;
@@ -1761,6 +1804,7 @@
       gateHostBtn.disabled = !spotifyReady;
       gateConnectBtn.textContent = spotifyReady ? "Spotify połączone" : "Połącz Spotify";
       gateConnectBtn.disabled = spotifyReady;
+      gateLogoutBtn.disabled = !spotifyReady;
       const displayName = (session?.name || nameInput.value || "kacper bochenski").trim();
       gateAvatar.textContent = initialsFromName(displayName);
       authHandle.textContent = `@${displayName.toLowerCase().replace(/\s+/g, "_")}`;
@@ -1841,6 +1885,7 @@
     createBtn.addEventListener("click", () => createOrJoinRoom(true));
     joinBtn.addEventListener("click", () => createOrJoinRoom(false));
     gateConnectBtn.addEventListener("click", () => connectSpotify());
+    gateLogoutBtn.addEventListener("click", () => logoutSpotify());
     gateJoinBtn.addEventListener("click", () => {
       entrySection.scrollIntoView({ behavior: "smooth", block: "start" });
       roomInput.focus();
