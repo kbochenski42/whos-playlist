@@ -27,12 +27,9 @@
       margin: 0;
       font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
       color: var(--ink);
-      background:
-        radial-gradient(1200px 600px at 10% -10%, rgba(14, 165, 233, 0.25), transparent 55%),
-        radial-gradient(900px 500px at 95% 5%, rgba(34, 197, 94, 0.22), transparent 58%),
-        linear-gradient(180deg, #020617 0%, #0f172a 100%);
+      background: linear-gradient(180deg, #0b1220 0%, #0f172a 100%);
       min-height: 100vh;
-      padding: 16px;
+      padding: 12px;
     }
 
     .app {
@@ -46,9 +43,9 @@
       background: var(--panel);
       border: 1px solid rgba(148, 163, 184, 0.16);
       border-radius: var(--radius);
-      box-shadow: var(--shadow);
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.24);
       backdrop-filter: blur(8px);
-      padding: 14px;
+      padding: 12px;
     }
 
     h1, h2 {
@@ -154,7 +151,7 @@
 
     .stack {
       display: grid;
-      gap: 8px;
+      gap: 6px;
     }
 
     .pill {
@@ -261,8 +258,15 @@
 
     .hint {
       color: #bfdbfe;
-      font-size: 0.8rem;
+      font-size: 0.78rem;
       line-height: 1.3;
+    }
+
+    .simple-box {
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      border-radius: 12px;
+      padding: 10px;
+      background: rgba(17, 24, 39, 0.58);
     }
 
     .round-chip {
@@ -320,7 +324,7 @@
   <main class="app">
     <section class="panel stack">
       <h1>Who’s Playlist? <span class="mini">MVP</span></h1>
-      <p>Dołącz do pokoju, posłuchaj fragmentu i zgadnij, czyja to piosenka.</p>
+      <p>Dołącz, połącz Spotify, zgaduj czyja to nuta.</p>
       <div class="grid two">
         <div>
           <label for="roomInput">Room ID</label>
@@ -348,15 +352,14 @@
 
     <section id="lobbySection" class="panel hidden">
       <h2>Lobby</h2>
-      <p>Gracze dołączają na żywo. Host ustawia piosenkę i właściciela rundy.</p>
+      <p>Najpierw wszyscy łączą Spotify. Potem host startuje grę.</p>
       <div class="players" id="playersList"></div>
 
-      <div class="stack" style="margin-top: 10px;">
-        <h2>Integracje muzyczne</h2>
-        <p class="mini">Spotify Stats: top tracks + top artists (4 tyg, 6 mies, all time). Apple Music: import po linku utworu.</p>
-        <div class="hint">Kliknij `Połącz Spotify` i zaloguj się. Przekierowanie robi się automatycznie.</div>
-        <div class="hint">Jednorazowo ustaw `SPOTIFY_CLIENT_ID` w kodzie i Redirect URI: `https://kbochenski42.github.io/whos-playlist/`.</div>
-        <div class="hint"><strong>Wymagane do startu rundy:</strong> każdy gracz w pokoju musi połączyć Spotify Stats.</div>
+      <div class="stack simple-box" style="margin-top: 10px;">
+        <h2>Spotify</h2>
+        <div class="hint">1. Kliknij `Połącz Spotify`</div>
+        <div class="hint">2. Zaloguj się</div>
+        <div class="hint">3. Host klika `Start gry`</div>
         <div class="grid two">
           <div>
             <label for="spotifyRangeSelect">Zakres Spotify stats</label>
@@ -380,37 +383,14 @@
 
       <div id="hostControls" class="hidden stack" style="margin-top: 10px;">
         <h2>Panel hosta</h2>
-        <div class="grid two">
-          <div>
-            <label for="trackName">Nazwa piosenki</label>
-            <input id="trackName" placeholder="Song name" />
-          </div>
-          <div>
-            <label for="trackArtist">Artysta</label>
-            <input id="trackArtist" placeholder="Artist" />
-          </div>
-        </div>
-        <div class="grid two">
-          <div>
-            <label for="trackUrl">Preview URL (mp3)</label>
-            <input id="trackUrl" placeholder="https://..." />
-          </div>
-          <div>
-            <label for="ownerSelect">Gracze z Spotify (właściciel losowany automatycznie)</label>
-            <select id="ownerSelect"></select>
-          </div>
-        </div>
-        <div class="grid two">
-          <div>
-            <label for="trackSource">Źródło rundy</label>
-            <select id="trackSource">
-              <option value="spotify_stats_auto">Spotify Stats Auto (wymagane logowanie wszystkich)</option>
-            </select>
-          </div>
-          <div>
-            <label for="trackLink">Status</label>
-            <input id="trackLink" value="Tryb manualny wyłączony. Gra bazuje wyłącznie na Spotify Stats." readonly />
-          </div>
+        <div class="hint">Gra startuje na 10 rund. Utwory losują się automatycznie ze Spotify stats.</div>
+        <div class="hidden">
+          <input id="trackName" />
+          <input id="trackArtist" />
+          <input id="trackUrl" />
+          <select id="ownerSelect"></select>
+          <select id="trackSource"><option value="spotify_stats_auto">spotify_stats_auto</option></select>
+          <input id="trackLink" />
         </div>
         <button id="startRoundBtn">Start gry (10 rund)</button>
         <button id="forceResultBtn" class="ghost">Reveal (awaryjnie)</button>
@@ -461,7 +441,7 @@
       </div>
     </section>
 
-    <p class="footer-note">Tryb realtime: Firebase (jeśli skonfigurowany). Fallback: LocalStorage tylko na jednym urządzeniu.</p>
+    <p class="footer-note">Prosty tryb imprezowy: Spotify + 10 szybkich rund.</p>
   </main>
 
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
