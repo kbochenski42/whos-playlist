@@ -779,19 +779,21 @@
 
     async function resolvePreviewFromITunes(track) {
       const term = `${track.name || ""} ${track.artist || ""}`.trim();
-      if (!term) return { previewUrl: "", imageUrl: "" };
+      if (!term) return { previewUrl: "", imageUrl: "", name: "", artist: "" };
       try {
         const response = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(term)}&entity=song&limit=5`);
-        if (!response.ok) return { previewUrl: "", imageUrl: "" };
+        if (!response.ok) return { previewUrl: "", imageUrl: "", name: "", artist: "" };
         const data = await response.json();
         const items = data.results || [];
         const found = items.find((item) => item.previewUrl);
         return {
           previewUrl: found?.previewUrl || "",
-          imageUrl: found?.artworkUrl100 || found?.artworkUrl60 || ""
+          imageUrl: found?.artworkUrl100 || found?.artworkUrl60 || "",
+          name: found?.trackName || "",
+          artist: found?.artistName || ""
         };
       } catch {
-        return { previewUrl: "", imageUrl: "" };
+        return { previewUrl: "", imageUrl: "", name: "", artist: "" };
       }
     }
 
@@ -1052,6 +1054,8 @@
       for (let i = 0; i < 10; i += 1) {
         const randomOwner = candidates[Math.floor(Math.random() * candidates.length)];
         const picked = randomOwner.options[Math.floor(Math.random() * randomOwner.options.length)];
+        let name = picked.name || "Unknown Song";
+        let artist = picked.artist || "Unknown Artist";
         let previewUrl = picked.previewUrl || "";
         let imageUrl = picked.imageUrl || "";
         if (!previewUrl) {
@@ -1060,13 +1064,20 @@
           if (!imageUrl) {
             imageUrl = fallback.imageUrl || "";
           }
+          // Keep metadata consistent with the actual preview source.
+          if (fallback.name) {
+            name = fallback.name;
+          }
+          if (fallback.artist) {
+            artist = fallback.artist;
+          }
         }
         if (!previewUrl) continue;
         return {
           ownerId: randomOwner.player.id,
           track: {
-            name: picked.name || "Unknown Song",
-            artist: picked.artist || "Unknown Artist",
+            name,
+            artist,
             previewUrl,
             imageUrl: imageUrl || DEFAULT_COVER,
             externalUrl: picked.externalUrl || ""
