@@ -304,18 +304,8 @@
       <div class="stack" style="margin-top: 10px;">
         <h2>Integracje muzyczne</h2>
         <p class="mini">Spotify Stats: top tracks + top artists (4 tyg, 6 mies, all time). Apple Music: import po linku utworu.</p>
-        <div class="grid two">
-          <div>
-            <label for="spotifyClientId">Spotify Client ID (opcjonalnie)</label>
-            <input id="spotifyClientId" placeholder="Wklej Client ID z Spotify Dashboard" />
-            <div class="hint">Utwórz app w Spotify Developer i dodaj redirect URI tej strony.</div>
-          </div>
-          <div>
-            <label for="spotifyScopeInfo">Status</label>
-            <input id="spotifyScopeInfo" value="Scope: user-top-read" readonly />
-            <div class="hint">Po połączeniu zapisujemy skróconą listę top tracków w pokoju.</div>
-          </div>
-        </div>
+        <div class="hint">Kliknij `Połącz Spotify` i zaloguj się. Przekierowanie robi się automatycznie.</div>
+        <div class="hint">Jednorazowo ustaw `SPOTIFY_CLIENT_ID` w kodzie i Redirect URI: `https://kbochenski42.github.io/whos-playlist/`.</div>
         <div class="grid two">
           <div>
             <label for="spotifyRangeSelect">Zakres Spotify stats</label>
@@ -331,7 +321,7 @@
           </div>
         </div>
         <div class="grid two">
-          <button id="connectSpotifyBtn" class="secondary">Połącz Spotify</button>
+          <button id="connectSpotifyBtn" class="secondary">Połącz Spotify (1 klik)</button>
           <button id="refreshSpotifyBtn" class="ghost">Odśwież moje Spotify stats</button>
         </div>
         <div id="musicStatus" class="hidden status"></div>
@@ -442,7 +432,6 @@
     const fetchTrackBtn = document.getElementById("fetchTrackBtn");
     const startRoundBtn = document.getElementById("startRoundBtn");
     const forceResultBtn = document.getElementById("forceResultBtn");
-    const spotifyClientId = document.getElementById("spotifyClientId");
     const spotifyRangeSelect = document.getElementById("spotifyRangeSelect");
     const spotifyStatsInfo = document.getElementById("spotifyStatsInfo");
     const connectSpotifyBtn = document.getElementById("connectSpotifyBtn");
@@ -466,6 +455,7 @@
     const SESSION_KEY = "whos-playlist-session";
     const SPOTIFY_AUTH_KEY = "whos-playlist-spotify-auth";
     const SPOTIFY_CLIENT_KEY = "whos-playlist-spotify-client-id";
+    const SPOTIFY_CLIENT_ID = "WSTAW_SPOTIFY_CLIENT_ID";
     const SPOTIFY_RANGE_KEY = "whos-playlist-spotify-range";
     const SPOTIFY_RANGES = ["short_term", "medium_term", "long_term"];
     const FIREBASE_CONFIG = {
@@ -483,7 +473,6 @@
     let isCloudMode = false;
     let roomUnsubscribe = null;
 
-    spotifyClientId.value = localStorage.getItem(SPOTIFY_CLIENT_KEY) || "";
     spotifyRangeSelect.value = localStorage.getItem(SPOTIFY_RANGE_KEY) || "medium_term";
 
     function safeId() {
@@ -668,6 +657,13 @@
       return roomData?.players?.find((p) => p.id === playerId);
     }
 
+    function getConfiguredSpotifyClientId() {
+      const fromCode = (SPOTIFY_CLIENT_ID || "").trim();
+      if (fromCode && fromCode !== "WSTAW_SPOTIFY_CLIENT_ID") return fromCode;
+      const fromStorage = (localStorage.getItem(SPOTIFY_CLIENT_KEY) || "").trim();
+      return fromStorage;
+    }
+
     function getPlayerSpotifyTracksByRange(player, range) {
       if (!player?.spotify) return [];
       const byRange = player.spotify.statsByRange?.[range];
@@ -799,12 +795,11 @@
         showMusicStatus("Najpierw dołącz do pokoju.", true);
         return;
       }
-      const clientId = spotifyClientId.value.trim();
+      const clientId = getConfiguredSpotifyClientId();
       if (!clientId) {
-        showMusicStatus("Podaj Spotify Client ID.", true);
+        showMusicStatus("Brak Spotify Client ID w kodzie. Ustaw SPOTIFY_CLIENT_ID w index.html.", true);
         return;
       }
-      localStorage.setItem(SPOTIFY_CLIENT_KEY, clientId);
       const state = randomString(20);
       const codeVerifier = randomString(64);
       const codeChallenge = await sha256Base64Url(codeVerifier);
@@ -851,7 +846,7 @@
         showMusicStatus("Sesja gracza nie pasuje do autoryzacji Spotify.", true);
         return;
       }
-      const clientId = localStorage.getItem(SPOTIFY_CLIENT_KEY) || "";
+      const clientId = getConfiguredSpotifyClientId();
       if (!clientId) {
         showMusicStatus("Brak Spotify Client ID.", true);
         return;
@@ -1302,9 +1297,6 @@
     fetchTrackBtn.addEventListener("click", () => fetchTrackFromLink());
     connectSpotifyBtn.addEventListener("click", () => connectSpotify());
     refreshSpotifyBtn.addEventListener("click", () => refreshSpotifyTracks());
-    spotifyClientId.addEventListener("input", () => {
-      localStorage.setItem(SPOTIFY_CLIENT_KEY, spotifyClientId.value.trim());
-    });
     spotifyRangeSelect.addEventListener("change", () => {
       localStorage.setItem(SPOTIFY_RANGE_KEY, spotifyRangeSelect.value);
       render();
