@@ -322,6 +322,13 @@
 </head>
 <body>
   <main class="app">
+    <section id="authSection" class="panel stack">
+      <h2>Start</h2>
+      <p>Zanim wejdziesz do gry, zaloguj się przez Spotify.</p>
+      <button id="gateConnectBtn" class="secondary">Połącz Spotify i przejdź dalej</button>
+      <div id="authStatus" class="hidden status"></div>
+    </section>
+
     <section class="panel stack">
       <h1>Who’s Playlist? <span class="mini">MVP</span></h1>
       <p>Dołącz, połącz Spotify, zgaduj czyja to nuta.</p>
@@ -460,6 +467,9 @@
     const nameInput = document.getElementById("nameInput");
     const createBtn = document.getElementById("createBtn");
     const joinBtn = document.getElementById("joinBtn");
+    const authSection = document.getElementById("authSection");
+    const gateConnectBtn = document.getElementById("gateConnectBtn");
+    const authStatus = document.getElementById("authStatus");
     const leaveBtn = document.getElementById("leaveBtn");
     const joinStatus = document.getElementById("joinStatus");
     const sessionBox = document.getElementById("sessionBox");
@@ -513,6 +523,7 @@
     const SPOTIFY_AUTH_KEY = "whos-playlist-spotify-auth";
     const SPOTIFY_CLIENT_KEY = "whos-playlist-spotify-client-id";
     const SPOTIFY_CLIENT_ID = "4c377a1c26e74ca7bb20a77df95db1f8";
+    const SPOTIFY_GLOBAL_TOKEN_KEY = "whos-playlist-spotify-global-token";
     const SPOTIFY_RANGE_KEY = "whos-playlist-spotify-range";
     const SPOTIFY_RANGES = ["short_term", "medium_term", "long_term"];
     const TOTAL_ROUNDS = 10;
@@ -703,11 +714,13 @@
 
     function saveSession(next) {
       session = next;
+      spotifyBootstrapTried = false;
       localStorage.setItem(SESSION_KEY, JSON.stringify(next));
     }
 
     function clearSession() {
       session = null;
+      spotifyBootstrapTried = false;
       localStorage.removeItem(SESSION_KEY);
     }
 
@@ -734,6 +747,18 @@
       joinStatus.classList.add("hidden");
       joinStatus.classList.remove("warn");
       joinStatus.textContent = "";
+    }
+
+    function showAuthStatus(text, isWarning = false) {
+      authStatus.textContent = text;
+      authStatus.classList.remove("hidden");
+      authStatus.classList.toggle("warn", isWarning);
+    }
+
+    function clearAuthStatus() {
+      authStatus.classList.add("hidden");
+      authStatus.classList.remove("warn");
+      authStatus.textContent = "";
     }
 
     function showMusicStatus(text, isWarning = false) {
@@ -891,16 +916,21 @@
     }
 
     function getSpotifyTokenFromSession() {
-      if (!session) return "";
-      const key = `${SPOTIFY_AUTH_KEY}-token-${session.playerId}`;
-      try {
-        const raw = JSON.parse(localStorage.getItem(key) || "null");
-        if (!raw || !raw.accessToken || !raw.expiresAt) return "";
-        if (Date.now() > raw.expiresAt) return "";
-        return raw.accessToken;
-      } catch {
-        return "";
+      function readToken(key) {
+        try {
+          const raw = JSON.parse(localStorage.getItem(key) || "null");
+          if (!raw || !raw.accessToken || !raw.expiresAt) return "";
+          if (Date.now() > raw.expiresAt) return "";
+          return raw.accessToken;
+        } catch {
+          return "";
+        }
       }
+      if (session?.playerId) {
+        const playerToken = readToken(`${SPOTIFY_AUTH_KEY}-token-${session.playerId}`);
+        if (playerToken) return playerToken;
+      }
+      return readToken(SPOTIFY_GLOBAL_TOKEN_KEY);
     }
 
     function saveSpotifyTokenForSession(accessToken, expiresInSeconds) {
@@ -915,15 +945,41 @@
       );
     }
 
+    function saveSpotifyGlobalToken(accessToken, expiresInSeconds) {
+      localStorage.setItem(
+        SPOTIFY_GLOBAL_TOKEN_KEY,
+        JSON.stringify({
+          accessToken,
+          expiresAt: Date.now() + Math.max(60, expiresInSeconds - 30) * 1000
+        })
+      );
+    }
+
+    function syncGlobalTokenToSession() {
+      if (!session?.playerId) return;
+      try {
+        const raw = JSON.parse(localStorage.getItem(SPOTIFY_GLOBAL_TOKEN_KEY) || "null");
+        if (!raw?.accessToken || !raw?.expiresAt) return;
+        localStorage.setItem(
+          `${SPOTIFY_AUTH_KEY}-token-${session.playerId}`,
+          JSON.stringify(raw)
+        );
+      } catch {
+        // ignore malformed token cache
+      }
+    }
+
+    function hasSpotifyAuth() {
+      return Boolean(getSpotifyTokenFromSession());
+    }
+
     async function connectSpotify() {
       clearMusicStatus();
-      if (!session || !roomData) {
-        showMusicStatus("Najpierw dołącz do pokoju.", true);
-        return;
-      }
+      clearAuthStatus();
       const clientId = getConfiguredSpotifyClientId();
       if (!clientId) {
         showMusicStatus("Brak Spotify Client ID w kodzie. Ustaw SPOTIFY_CLIENT_ID w index.html.", true);
+        showAuthStatus("Brak Spotify Client ID w konfiguracji.", true);
         return;
       }
       const state = randomString(20);
@@ -936,8 +992,8 @@
           state,
           codeVerifier,
           redirectUri,
-          playerId: session.playerId,
-          roomId: session.roomId
+          playerId: session?.playerId || "",
+          roomId: session?.roomId || ""
         })
       );
       const params = new URLSearchParams({
@@ -966,15 +1022,13 @@
       const auth = JSON.parse(raw);
       if (auth.state !== state) {
         showMusicStatus("Błędny state z autoryzacji Spotify.", true);
-        return;
-      }
-      if (!session || auth.playerId !== session.playerId || auth.roomId !== session.roomId) {
-        showMusicStatus("Sesja gracza nie pasuje do autoryzacji Spotify.", true);
+        showAuthStatus("Nie udało się potwierdzić logowania Spotify.", true);
         return;
       }
       const clientId = getConfiguredSpotifyClientId();
       if (!clientId) {
         showMusicStatus("Brak Spotify Client ID.", true);
+        showAuthStatus("Brak konfiguracji Spotify.", true);
         return;
       }
 
@@ -992,14 +1046,23 @@
 
       if (!tokenResponse.ok) {
         showMusicStatus("Nie udało się wymienić kodu Spotify na token.", true);
+        showAuthStatus("Logowanie Spotify nie powiodło się.", true);
         return;
       }
 
       const tokenPayload = await tokenResponse.json();
-      saveSpotifyTokenForSession(tokenPayload.access_token, tokenPayload.expires_in || 3600);
-      await refreshSpotifyTracks();
-      await syncAndRender();
-      showMusicStatus("Spotify połączone. Dane odświeżone automatycznie.");
+      saveSpotifyGlobalToken(tokenPayload.access_token, tokenPayload.expires_in || 3600);
+      if (session) {
+        saveSpotifyTokenForSession(tokenPayload.access_token, tokenPayload.expires_in || 3600);
+      }
+      if (session && roomData) {
+        await refreshSpotifyTracks();
+        await syncAndRender();
+      } else {
+        render();
+      }
+      showMusicStatus("Spotify połączone.");
+      showAuthStatus("Spotify połączone. Możesz dołączyć do gry.");
       localStorage.removeItem(SPOTIFY_AUTH_KEY);
       url.searchParams.delete("code");
       url.searchParams.delete("state");
@@ -1204,11 +1267,13 @@
       await setRoomData(roomId, room);
 
       saveSession({ roomId, playerId, name: playerName });
+      syncGlobalTokenToSession();
       roomInput.value = roomId;
       roomData = room;
       ensureRoomSubscription(roomId);
       render();
       showStatus(makeNew ? "Pokój utworzony. Udostępnij Room ID znajomym." : "Dołączono do pokoju.");
+      bootstrapSpotifyDataIfNeeded();
     }
 
     async function startRound() {
@@ -1515,10 +1580,10 @@
 
     async function bootstrapSpotifyDataIfNeeded() {
       if (spotifyBootstrapTried) return;
-      spotifyBootstrapTried = true;
       if (!session || !roomData) return;
       const token = getSpotifyTokenFromSession();
       if (!token) return;
+      spotifyBootstrapTried = true;
       const me = getPlayerById(session.playerId);
       const selectedRange = spotifyRangeSelect.value || "medium_term";
       const hasStats = getPlayerSpotifyTracksByRange(me, selectedRange).length > 0;
@@ -1531,6 +1596,18 @@
       if (session) {
         nameInput.value = session.name || "";
         roomInput.value = session.roomId || "";
+      }
+
+      const spotifyReady = hasSpotifyAuth();
+      authSection.classList.toggle("hidden", spotifyReady);
+      createBtn.disabled = !spotifyReady;
+      joinBtn.disabled = !spotifyReady;
+      roomInput.disabled = !spotifyReady;
+      nameInput.disabled = !spotifyReady;
+      if (!spotifyReady) {
+        showAuthStatus("Aby wejść do gry, najpierw połącz Spotify.", true);
+      } else if (!authStatus.classList.contains("hidden")) {
+        showAuthStatus("Spotify połączone. Możesz dołączyć do gry.");
       }
 
       if (!session || !roomData) {
@@ -1603,6 +1680,7 @@
 
     createBtn.addEventListener("click", () => createOrJoinRoom(true));
     joinBtn.addEventListener("click", () => createOrJoinRoom(false));
+    gateConnectBtn.addEventListener("click", () => connectSpotify());
     leaveBtn.addEventListener("click", () => leaveRoom());
     startRoundBtn.addEventListener("click", () => startRound());
     connectSpotifyBtn.addEventListener("click", () => connectSpotify());
