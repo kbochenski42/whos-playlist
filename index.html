@@ -384,6 +384,15 @@
       <div id="hostControls" class="hidden stack" style="margin-top: 10px;">
         <h2>Panel hosta</h2>
         <div class="hint">Gra startuje na 10 rund. Utwory losują się automatycznie ze Spotify stats.</div>
+        <div>
+          <label for="roundsSelect">Liczba rund</label>
+          <select id="roundsSelect">
+            <option value="5">5 rund</option>
+            <option value="10" selected>10 rund</option>
+            <option value="15">15 rund</option>
+            <option value="20">20 rund</option>
+          </select>
+        </div>
         <div class="hidden">
           <input id="trackName" />
           <input id="trackArtist" />
@@ -497,6 +506,7 @@
     const winnerBanner = document.getElementById("winnerBanner");
     const resultHostActions = document.getElementById("resultHostActions");
     const nextRoundBtn = document.getElementById("nextRoundBtn");
+    const roundsSelect = document.getElementById("roundsSelect");
 
     const ROOM_PREFIX = "whos-playlist-room-";
     const SESSION_KEY = "whos-playlist-session";
@@ -525,6 +535,7 @@
     let hostRevealInFlight = false;
     let hostAutoNextTimeout = null;
     let hostAutoNextKey = "";
+    let spotifyBootstrapTried = false;
 
     spotifyRangeSelect.value = localStorage.getItem(SPOTIFY_RANGE_KEY) || "medium_term";
 
@@ -985,6 +996,8 @@
       const tokenPayload = await tokenResponse.json();
       saveSpotifyTokenForSession(tokenPayload.access_token, tokenPayload.expires_in || 3600);
       await refreshSpotifyTracks();
+      await syncAndRender();
+      showMusicStatus("Spotify połączone. Dane odświeżone automatycznie.");
       localStorage.removeItem(SPOTIFY_AUTH_KEY);
       url.searchParams.delete("code");
       url.searchParams.delete("state");
@@ -1011,9 +1024,8 @@
         }
         upsertPlayerSpotifyData(session.playerId, statsByRange, topArtistsByRange);
         const selected = spotifyRangeSelect.value || "medium_term";
-        const previews = (statsByRange[selected] || []).filter((t) => t.previewUrl).length;
-        const favArtist = (topArtistsByRange[selected] || [])[0]?.name || "brak";
-        showMusicStatus(`Spotify stats gotowe. Range: ${selected}, preview tracks: ${previews}, top artist: ${favArtist}.`);
+        const tracksCount = (statsByRange[selected] || []).length;
+        showMusicStatus(`Spotify stats gotowe. Zakres: ${selected}. Utwory: ${tracksCount}.`);
         render();
       } catch {
         showMusicStatus("Nie udało się pobrać Spotify stats. Sprawdź połączenie Spotify.", true);
@@ -1191,6 +1203,7 @@
     async function startRound() {
       if (!session || !roomData || !isHost(session.playerId, roomData)) return;
       const selectedRange = spotifyRangeSelect.value || "medium_term";
+      const selectedRounds = Math.max(1, Math.min(50, Number(roundsSelect.value) || TOTAL_ROUNDS));
       const unready = getUnreadyPlayers(selectedRange);
       if (unready.length) {
         showStatus(`Nie wszyscy mają Spotify stats. Brakuje: ${unready.map((p) => p.name).join(", ")}.`, true);
@@ -1204,7 +1217,7 @@
 
       roomData.scores = Object.fromEntries(roomData.players.map((p) => [p.id, 0]));
       roomData.game = {
-        totalRounds: TOTAL_ROUNDS,
+        totalRounds: selectedRounds,
         currentRound: 1,
         isActive: true,
         isFinished: false
@@ -1330,10 +1343,8 @@
         const me = session && p.id === session.playerId ? " (Ty)" : "";
         const score = roomData.scores[p.id] || 0;
         const rangeTracks = getPlayerSpotifyTracksByRange(p, selectedRange);
-        const spotifyPreviews = rangeTracks.filter((t) => t.previewUrl).length;
-        const favArtist = p.spotify?.topArtistsByRange?.[selectedRange]?.[0]?.name || p.spotify?.profile?.favoriteArtist || "";
         const spotifyLabel = rangeTracks.length
-          ? `Spotify stats: ${rangeTracks.length} tracks • preview: ${spotifyPreviews}${favArtist ? ` • top: ${favArtist}` : ""}`
+          ? `Spotify połączone`
           : "Spotify stats: brak";
         row.innerHTML = `<span>${p.name}${me} <span class="mini">• ${role} • ${spotifyLabel}</span></span><span>${score} pkt</span>`;
         playersList.appendChild(row);
@@ -1449,10 +1460,7 @@
         long_term: "all time"
       };
       const selectedRange = spotifyRangeSelect.value || "medium_term";
-      const mine = roomData?.players?.find((p) => p.id === session?.playerId);
-      const previews = getPlayerSpotifyTracksByRange(mine, selectedRange).filter((t) => t.previewUrl).length;
-      const topArtist = mine?.spotify?.topArtistsByRange?.[selectedRange]?.[0]?.name || "brak";
-      spotifyStatsInfo.value = `Range: ${rangeLabels[selectedRange]} • preview: ${previews} • top artist: ${topArtist}`;
+      spotifyStatsInfo.value = `Tryb: Zgadnij, czyja to piosenka • Zakres: ${rangeLabels[selectedRange]}`;
     }
 
     function scheduleHostAutoNext() {
@@ -1494,6 +1502,20 @@
       }
     }
 
+    async function bootstrapSpotifyDataIfNeeded() {
+      if (spotifyBootstrapTried) return;
+      spotifyBootstrapTried = true;
+      if (!session || !roomData) return;
+      const token = getSpotifyTokenFromSession();
+      if (!token) return;
+      const me = getPlayerById(session.playerId);
+      const selectedRange = spotifyRangeSelect.value || "medium_term";
+      const hasStats = getPlayerSpotifyTracksByRange(me, selectedRange).length > 0;
+      if (hasStats) return;
+      await refreshSpotifyTracks();
+      await syncAndRender();
+    }
+
     function render() {
       if (session) {
         nameInput.value = session.name || "";
@@ -1529,10 +1551,14 @@
         trackName.readOnly = true;
         trackArtist.readOnly = true;
         trackUrl.readOnly = true;
+        roundsSelect.disabled = false;
         const selectedRange = spotifyRangeSelect.value || "medium_term";
         const unready = getUnreadyPlayers(selectedRange);
         startRoundBtn.disabled = unready.length > 0;
-        startRoundBtn.textContent = roomData.game?.isFinished ? "Zagraj ponownie (10 rund)" : "Start gry (10 rund)";
+        const roundsLabel = Number(roundsSelect.value) || (roomData.game?.totalRounds || TOTAL_ROUNDS);
+        startRoundBtn.textContent = roomData.game?.isFinished
+          ? `Zagraj ponownie (${roundsLabel} rund)`
+          : `Start gry (${roundsLabel} rund)`;
         if (unready.length) {
           showMusicStatus(`Aby zacząć rundę, Spotify muszą połączyć: ${unready.map((p) => p.name).join(", ")}.`, true);
         } else {
@@ -1542,7 +1568,8 @@
         startRoundBtn.disabled = false;
         trackSource.disabled = true;
         ownerSelect.disabled = true;
-        startRoundBtn.textContent = "Start gry (10 rund)";
+        roundsSelect.disabled = true;
+        startRoundBtn.textContent = `Start gry (${roomData.game?.totalRounds || TOTAL_ROUNDS} rund)`;
       }
 
       lobbySection.classList.toggle("hidden", roomData.phase !== "lobby");
@@ -1573,6 +1600,9 @@
       localStorage.setItem(SPOTIFY_RANGE_KEY, spotifyRangeSelect.value);
       render();
     });
+    roundsSelect.addEventListener("change", () => {
+      render();
+    });
     showResultBtn.addEventListener("click", () => revealResult());
     forceResultBtn.addEventListener("click", () => revealResult());
     nextRoundBtn.addEventListener("click", () => nextRound());
@@ -1589,7 +1619,7 @@
       showStatus("Przywrócono poprzednią sesję.");
     }
     initDatabaseMode();
-    syncAndRender();
+    syncAndRender().then(() => bootstrapSpotifyDataIfNeeded());
     completeSpotifyAuthIfNeeded().catch(() => {
       showMusicStatus("Nie udało się dokończyć logowania Spotify.", true);
     });
