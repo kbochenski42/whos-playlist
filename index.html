@@ -1158,6 +1158,8 @@
     async function connectSpotify() {
       clearMusicStatus();
       clearAuthStatus();
+      // Force fresh auth flow on every click.
+      clearSpotifyAuthData();
       setSpotifyAuthActive(true);
       const clientId = getConfiguredSpotifyClientId();
       if (!clientId) {
@@ -1185,6 +1187,7 @@
         scope: "user-top-read",
         redirect_uri: redirectUri,
         state,
+        show_dialog: "true",
         code_challenge_method: "S256",
         code_challenge: codeChallenge
       });
