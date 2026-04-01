@@ -45,10 +45,12 @@
       align-items: center;
       justify-content: center;
       gap: 0;
+      max-width: 100%;
+      width: 100%;
     }
 
     .app.auth-mode #authSection {
-      width: min(680px, 100%);
+      width: min(430px, 100%);
       margin: 0 auto;
     }
 
@@ -335,33 +337,45 @@
     .auth-app {
       text-align: center;
       align-items: center;
-      padding: 18px 14px;
+      padding: 18px 14px 26px;
+      position: relative;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 10% 15%, rgba(148, 163, 184, 0.45) 0 2px, transparent 3px),
+        radial-gradient(circle at 85% 28%, rgba(148, 163, 184, 0.45) 0 2px, transparent 3px),
+        radial-gradient(circle at 35% 70%, rgba(148, 163, 184, 0.35) 0 2px, transparent 3px),
+        radial-gradient(circle at 68% 82%, rgba(148, 163, 184, 0.35) 0 2px, transparent 3px),
+        #05070d;
+      border: 0;
+      box-shadow: none;
+      min-height: 80vh;
+      justify-content: center;
     }
 
     .avatar-wrap {
-      width: 110px;
-      height: 110px;
+      width: 150px;
+      height: 150px;
       border-radius: 999px;
-      margin: 6px auto 0;
+      margin: 10px auto 0;
       background: radial-gradient(circle at 30% 20%, #e5e7eb, #94a3b8);
       display: grid;
       place-items: center;
       color: #0f172a;
-      font-size: 2rem;
+      font-size: 2.6rem;
       font-weight: 800;
-      border: 3px solid rgba(255, 255, 255, 0.5);
+      border: 3px solid rgba(255, 255, 255, 0.72);
       box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25);
     }
 
     .auth-title {
-      font-size: 1.35rem;
+      font-size: 1.5rem;
       font-weight: 800;
       margin-top: 8px;
     }
 
     .auth-sub {
-      color: #cbd5e1;
-      font-size: 0.92rem;
+      color: #d1d5db;
+      font-size: 0.98rem;
       margin-top: 4px;
       max-width: 520px;
     }
@@ -377,7 +391,7 @@
     .btn-app-grad {
       border-radius: 14px;
       font-size: 1.06rem;
-      padding: 12px;
+      padding: 13px;
       color: #fff;
       background: linear-gradient(90deg, #ff2d95 0%, #ff7b00 100%);
     }
@@ -385,18 +399,62 @@
     .btn-app-light {
       border-radius: 14px;
       font-size: 1.06rem;
-      padding: 12px;
+      padding: 13px;
       color: #111827;
       background: #f3f4f6;
+    }
+
+    .auth-top-row {
+      position: absolute;
+      top: 14px;
+      left: 14px;
+      right: 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      pointer-events: none;
+    }
+
+    .badge-premium {
+      font-size: 0.78rem;
+      border: 1px solid rgba(250, 204, 21, 0.55);
+      border-radius: 999px;
+      padding: 5px 10px;
+      color: #fde68a;
+      background: rgba(245, 158, 11, 0.08);
+    }
+
+    .gear {
+      width: 30px;
+      height: 30px;
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.4);
+      display: grid;
+      place-items: center;
+      color: #e5e7eb;
+      background: rgba(17, 24, 39, 0.55);
+      font-size: 0.9rem;
+    }
+
+    .auth-handle {
+      font-size: 1.2rem;
+      font-weight: 800;
+      margin-top: 3px;
+      color: #f8fafc;
     }
   </style>
 </head>
 <body>
   <main class="app">
     <section id="authSection" class="panel stack auth-app">
+      <div class="auth-top-row">
+        <div class="badge-premium">PREMIUM</div>
+        <div class="gear">⚙</div>
+      </div>
       <div class="avatar-wrap" id="gateAvatar">WP</div>
-      <div class="auth-title">Who’s Playlist</div>
-      <div class="auth-sub">Dołącz do gry ze znajomymi i zgaduj, czyja to piosenka.</div>
+      <div class="auth-title">Hejka,</div>
+      <div class="auth-handle" id="authHandle">@who_s_playlist</div>
+      <div class="auth-sub">Dołącz do gry ze znajomymi, podając kod pokoju lub rozpocznij własną rozgrywkę.</div>
       <div class="cta-stack">
         <button id="gateConnectBtn" class="btn-app-grad">Połącz Spotify</button>
         <button id="gateJoinBtn" class="btn-app-light" disabled>Dołącz do gry</button>
@@ -551,6 +609,7 @@
     const gateJoinBtn = document.getElementById("gateJoinBtn");
     const gateHostBtn = document.getElementById("gateHostBtn");
     const gateAvatar = document.getElementById("gateAvatar");
+    const authHandle = document.getElementById("authHandle");
     const authStatus = document.getElementById("authStatus");
     const leaveBtn = document.getElementById("leaveBtn");
     const joinStatus = document.getElementById("joinStatus");
@@ -1702,7 +1761,9 @@
       gateHostBtn.disabled = !spotifyReady;
       gateConnectBtn.textContent = spotifyReady ? "Spotify połączone" : "Połącz Spotify";
       gateConnectBtn.disabled = spotifyReady;
-      gateAvatar.textContent = initialsFromName(session?.name || nameInput.value);
+      const displayName = (session?.name || nameInput.value || "kacper bochenski").trim();
+      gateAvatar.textContent = initialsFromName(displayName);
+      authHandle.textContent = `@${displayName.toLowerCase().replace(/\s+/g, "_")}`;
       if (!spotifyReady) {
         showAuthStatus("Aby wejść do gry, najpierw połącz Spotify.", true);
       } else {
